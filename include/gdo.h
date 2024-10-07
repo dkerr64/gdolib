@@ -157,6 +157,8 @@ typedef struct {
     gpio_num_t uart_tx_pin; // UART TX pin
     gpio_num_t uart_rx_pin; // UART RX pin
     gpio_num_t obst_in_pin; // Obstruction input pin
+    gpio_num_t rf_tx_pin; // UART TX pin
+    gpio_num_t rf_rx_pin; // UART RX pin
 } gdo_config_t;
 
 #define GDO_PAIRED_DEVICE_COUNT_UNKNOWN 0xff
