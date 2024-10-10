@@ -775,7 +775,7 @@ esp_err_t gdo_set_close_duration(uint16_t ms) {
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid.
 */
 esp_err_t gdo_set_min_command_interval(uint32_t ms) {
-    if (ms < 50) {
+    if (ms < 300) {
         ESP_LOGE(TAG, "Invalid minimum command interval: %" PRIu32, ms);
         return ESP_ERR_INVALID_ARG;
     }
