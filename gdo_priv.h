@@ -56,13 +56,14 @@ typedef enum {
     GDO_CMD_PAIR_2_RESP = 0x401,
     GDO_CMD_SET_TTC = 0x402,
     GDO_CMD_CANCEL_TTC = 0x408,
-    GDO_CMD_TTC = 0x40a,
+    GDO_CMD_UPDATE_TTC = 0x40a,
     GDO_CMD_GET_OPENINGS = 0x48b,
     GDO_CMD_OPENINGS = 0x48c,
     GDO_CMD_MAX,
 } gdo_command_t;
 
 typedef enum {
+    V1_CMD_MIN = 0x2F,
     V1_CMD_TOGGLE_DOOR_PRESS = 0x30,
     V1_CMD_TOGGLE_DOOR_RELEASE = 0x31,
     V1_CMD_TOGGLE_LIGHT_PRESS = 0x32,
@@ -73,7 +74,7 @@ typedef enum {
     V1_CMD_QUERY_DOOR_STATUS = 0x38,
     V1_CMD_OBSTRUCTION = 0x39,
     V1_CMD_QUERY_OTHER_STATUS = 0x3A,
-    V1_CMD_MAX = 0xFF,
+    V1_CMD_MAX = 0x3B,
 } gdo_v1_command_t;
 
 typedef enum {
@@ -89,7 +90,8 @@ typedef enum {
     GDO_EVENT_LEARN_UPDATE,
     GDO_EVENT_OPENINGS_UPDATE,
     GDO_EVENT_MOTION_UPDATE,
-    GDO_EVENT_TTC_UPDATE,
+    GDO_EVENT_UPDATE_TTC,
+    GDO_EVENT_SET_TTC,
     GDO_EVENT_PAIRED_DEVICES_UPDATE,
     GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT,
     GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT,
@@ -143,6 +145,11 @@ typedef struct {
     uint8_t byte2;
     esp_timer_handle_t timer;
 } gdo_sched_cmd_args_t;
+
+typedef struct {
+    gdo_event_type_t event;
+    esp_timer_handle_t timer;
+} gdo_sched_evt_args_t;
 
 typedef union {
     gdo_event_type_t gdo_event;

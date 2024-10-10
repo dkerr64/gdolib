@@ -96,6 +96,7 @@ typedef enum {
 typedef enum {
     GDO_PROTOCOL_SEC_PLUS_V1 = 1,
     GDO_PROTOCOL_SEC_PLUS_V2,
+    GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL,
     GDO_PROTOCOL_MAX,
 } gdo_protocol_type_t;
 
@@ -111,7 +112,9 @@ typedef enum {
     GDO_CB_EVENT_LEARN,
     GDO_CB_EVENT_OPENINGS,
     GDO_CB_EVENT_MOTION,
-    GDO_CB_EVENT_TTC,
+    GDO_CB_EVENT_SET_TTC,
+    GDO_CB_EVENT_CANCLE_TTC,
+    GDO_CB_EVENT_UPDATE_TTC,
     GDO_CB_EVENT_PAIRED_DEVICES,
     GDO_CB_EVENT_OPEN_DURATION_MEASURMENT,
     GDO_CB_EVENT_CLOSE_DURATION_MEASURMENT,
@@ -139,6 +142,7 @@ typedef struct {
     gdo_learn_state_t learn; // Learn state
     gdo_paired_device_t paired_devices; // Paired devices
     bool synced; // Synced state
+    bool ttc_enabled; //ttc active
     uint16_t openings; // Number of openings
     uint16_t ttc_seconds; // Time to close in seconds
     uint16_t open_ms; // Time door takes to open from fully closed in milliseconds
@@ -156,6 +160,8 @@ typedef struct {
     gpio_num_t uart_tx_pin; // UART TX pin
     gpio_num_t uart_rx_pin; // UART RX pin
     gpio_num_t obst_in_pin; // Obstruction input pin
+    gpio_num_t rf_tx_pin; // RF TX pin
+    gpio_num_t rf_rx_pin; // RF RX pin
 } gdo_config_t;
 
 #define GDO_PAIRED_DEVICE_COUNT_UNKNOWN 0xff
@@ -390,6 +396,14 @@ esp_err_t gdo_set_client_id(uint32_t client_id);
 esp_err_t gdo_set_protocol(gdo_protocol_type_t protocol);
 
 /**
+ * @brief Sets the time to close in minutes
+ * @param time_to_close The time to close value.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid,
+ * ESP_ERR_INVALID_STATE if the time is out of range.
+*/
+esp_err_t gdo_set_time_to_close(uint16_t time_to_close);
+
+/**
  * @brief Sets the time the door takes to open from fully closed in milliseconds.
  * @param ms The time the door takes to open from fully closed in milliseconds.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the ms is invalid.
@@ -402,6 +416,13 @@ esp_err_t gdo_set_open_duration(uint16_t ms);
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the ms is invalid.
 */
 esp_err_t gdo_set_close_duration(uint16_t ms);
+
+/**
+ * @brief Sets the minimum time in milliseconds to wait between sending consecutive commands.
+ * @param ms The minimum time in milliseconds.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid.
+*/
+esp_err_t gdo_set_min_command_interval(uint32_t ms);
 
 #ifdef __cplusplus
 }
