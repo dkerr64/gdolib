@@ -80,6 +80,7 @@ static gdo_status_t g_status = {
                        GDO_PAIRED_DEVICE_COUNT_UNKNOWN,
                        GDO_PAIRED_DEVICE_COUNT_UNKNOWN},
     .synced = false,
+    .ttc_enabled = false,
     .openings = 0,
     .ttc_seconds = 0,
     .open_ms = 0,
@@ -102,6 +103,7 @@ static esp_timer_handle_t door_position_sync_timer;
 static esp_timer_handle_t obst_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
+static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
 
@@ -525,6 +527,26 @@ esp_err_t gdo_light_off(void) {
 
     return err;
 }
+
+/**
+ * @brief Sets the time to close.
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if the encoding fails.
+*/
+esp_err_t gdo_set_ttc(uint16_t seconds) {
+    esp_err_t err = ESP_OK;
+
+    if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1) {
+    } else {
+        //queue_command(gdo_command_t command, uint8_t nibble, uint8_t byte1, uint8_t byte2)
+        err = queue_command(GDO_CMD_SET_TTC, seconds, 0, 0); 
+        if (err == ESP_OK) {
+            get_status();
+        }
+    }
+
+    return err;
+}
+
 
 /**
  * @brief Toggles the light.
@@ -1324,8 +1346,12 @@ static void decode_packet(uint8_t *packet) {
         update_motion_state(GDO_MOTION_STATE_DETECTED);
     } else if (cmd == GDO_CMD_OPENINGS) {
         update_openings(nibble, ((byte1 << 8) | byte2));
+    } else if (cmd == GDO_CMD_UPDATE_TTC) {
+        update_ttc((byte1 << 8) | byte2);
+        queue_event((gdo_event_t){GDO_EVENT_UPDATE_TTC});
     } else if (cmd == GDO_CMD_SET_TTC) {
         update_ttc((byte1 << 8) | byte2);
+        queue_event((gdo_event_t){GDO_EVENT_SET_TTC});
     } else if (cmd == GDO_CMD_PAIRED_DEVICES) {
         update_paired_devices(nibble, byte2);
     } else if (cmd == GDO_CMD_BATTERY_STATUS) {
@@ -1578,8 +1604,13 @@ static void gdo_main_task(void* arg) {
             case GDO_EVENT_MOTION_UPDATE:
                 cb_event = GDO_CB_EVENT_MOTION;
                 break;
-            case GDO_EVENT_TTC_UPDATE:
-                cb_event = GDO_CB_EVENT_TTC;
+            case GDO_EVENT_UPDATE_TTC:
+                cb_event = GDO_CB_EVENT_UPDATE_TTC;
+                ESP_LOGI(TAG, "GDO_CB_EVENT_UPDATE_TTC");
+                break;
+            case GDO_EVENT_SET_TTC:
+                cb_event = GDO_CB_EVENT_SET_TTC;
+                ESP_LOGI(TAG, "GDO_CB_EVENT_SET_TTC");
                 break;
             case GDO_EVENT_PAIRED_DEVICES_UPDATE:
                 cb_event = GDO_CB_EVENT_PAIRED_DEVICES;
@@ -1896,11 +1927,27 @@ inline static void update_openings(uint8_t flag, uint16_t count) {
  * @param ttc The new TTC to update to.
 */
 inline static void update_ttc(uint16_t ttc) {
-    ESP_LOGD(TAG, "TTC: %u", ttc);
+    ESP_LOGI(TAG, "TTC Seconds remaining: %u", ttc);
     if (g_status.ttc_seconds != ttc) {
         g_status.ttc_seconds = ttc;
-        queue_event((gdo_event_t){GDO_EVENT_TTC_UPDATE});
     }
+}
+
+/**
+ * @brief Set the time to close
+ * @param time_to_close The new time to close set by the UI
+*/
+esp_err_t gdo_set_time_to_close(uint16_t time_to_close) {
+    g_ttc_delay_s = time_to_close;
+    g_status.ttc_enabled = (time_to_close > 0) ? 1 : 0;
+    esp_err_t err = ESP_OK;
+    uint8_t byte1 = (time_to_close >> 8);
+    uint8_t byte2 = (uint8_t)time_to_close;
+    uint8_t nibble = 1;
+    update_ttc(time_to_close);
+    queue_command(GDO_CMD_SET_TTC, nibble, byte1, byte2);
+    queue_event((gdo_event_t){GDO_EVENT_SET_TTC});
+    return err;
 }
 
 /**
