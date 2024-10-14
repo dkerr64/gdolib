@@ -400,8 +400,9 @@ esp_err_t gdo_sync(void) {
  * the encoding fails.
  */
 esp_err_t gdo_door_open(void) {
-  g_status.door_target = 0;
 
+  g_status.door_target = 0;
+  if (g_status.ttc_enabled == true) gdo_set_time_to_close(g_ttc_delay_s);
   if (g_status.door == GDO_DOOR_STATE_OPENING ||
       g_status.door == GDO_DOOR_STATE_OPEN) {
     return ESP_OK;
@@ -446,6 +447,7 @@ esp_err_t gdo_door_stop(void) {
  * the encoding fails.
  */
 esp_err_t gdo_door_toggle(void) {
+  if (g_status.ttc_enabled == true) gdo_set_time_to_close(g_ttc_delay_s);
   return send_door_action(GDO_DOOR_ACTION_TOGGLE);
 }
 
