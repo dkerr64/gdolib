@@ -61,8 +61,7 @@ static esp_err_t schedule_event(gdo_event_type_t event, uint32_t time_us);
 static esp_err_t gdo_v1_toggle_cmd(gdo_v1_command_t cmd);
 static esp_err_t queue_event(gdo_event_t event);
 
-/******************************** GLOBAL VARIABLES
- * ************************************/
+/****************************** GLOBAL VARIABLES **********************************/
 
 static gdo_event_callback_t g_event_callback;
 
@@ -76,6 +75,7 @@ static gdo_status_t g_status = {
     .button = GDO_BUTTON_STATE_MAX,
     .battery = GDO_BATT_STATE_UNKNOWN,
     .learn = GDO_LEARN_STATE_MAX,
+    .obstruction = GDO_OBSTRUCTION_STATE_MAX,
     .paired_devices = {GDO_PAIRED_DEVICE_COUNT_UNKNOWN,
                        GDO_PAIRED_DEVICE_COUNT_UNKNOWN,
                        GDO_PAIRED_DEVICE_COUNT_UNKNOWN,
@@ -90,7 +90,8 @@ static gdo_status_t g_status = {
     .door_position = -1,
     .door_target = -1,
     .client_id = 0x5AFE,
-    .rolling_code = 0,
+    .toggle_only = false,
+    .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
 };
 
 static bool g_protocol_forced;
@@ -108,8 +109,7 @@ static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-/******************************* PUBLIC API FUNCTIONS
- * **********************************/
+/******************************* PUBLIC API FUNCTIONS **********************************/
 
 /**
  * @brief Initializes the GDO driver.
@@ -151,8 +151,8 @@ esp_err_t gdo_init(const gdo_config_t *config) {
     return err;
   }
 
-  if (g_config.obst_in_pin >= 0 && !g_config.obst_from_status) {
-    gpio_config_t io_conf = {0};
+  if ((g_config.obst_in_pin >= 0 ) && !g_config.obst_from_status) {
+    gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pin_bit_mask = (1ULL << g_config.obst_in_pin);
@@ -162,6 +162,11 @@ esp_err_t gdo_init(const gdo_config_t *config) {
         (gdo_obstruction_stats_t *)calloc(1, sizeof(gdo_obstruction_stats_t));
     if (!obst_stats) {
       return ESP_ERR_NO_MEM;
+    }
+
+    err = gpio_config(&io_conf);
+    if (err != ESP_OK) {
+      return err;
     }
 
     err = gpio_install_isr_service(0);
@@ -175,16 +180,15 @@ esp_err_t gdo_init(const gdo_config_t *config) {
       return err;
     }
 
-    err = gpio_config(&io_conf);
-    if (err != ESP_OK) {
-      return err;
-    }
-
     timer_args.callback = obst_timer_cb;
     timer_args.arg = (void *)obst_stats;
     timer_args.dispatch_method = ESP_TIMER_TASK;
     timer_args.name = "obst_timer";
     err = esp_timer_create(&timer_args, &obst_timer);
+
+    // Check the obstruction pulse counts every 50ms
+    err = esp_timer_start_periodic(obst_timer, 50000);
+
     if (err != ESP_OK) {
       return err;
     }
@@ -227,7 +231,6 @@ esp_err_t gdo_init(const gdo_config_t *config) {
     return ESP_ERR_NO_MEM;
   }
 
-  ESP_LOGI(TAG, "GDO initilized");
   return ESP_OK;
 }
 
@@ -289,6 +292,7 @@ esp_err_t gdo_deinit(void) {
   g_status.button = GDO_BUTTON_STATE_MAX;
   g_status.battery = GDO_BATT_STATE_UNKNOWN;
   g_status.learn = GDO_LEARN_STATE_MAX;
+  g_status.obstruction = GDO_OBSTRUCTION_STATE_CLEAR;
   g_status.paired_devices.total_remotes = GDO_PAIRED_DEVICE_COUNT_UNKNOWN;
   g_status.paired_devices.total_keypads = GDO_PAIRED_DEVICE_COUNT_UNKNOWN;
   g_status.paired_devices.total_wall_controls = GDO_PAIRED_DEVICE_COUNT_UNKNOWN;
@@ -402,9 +406,9 @@ esp_err_t gdo_sync(void) {
 esp_err_t gdo_door_open(void) {
 
   g_status.door_target = 0;
-  if (g_status.ttc_enabled == true) gdo_set_time_to_close(g_ttc_delay_s);
   if (g_status.door == GDO_DOOR_STATE_OPENING ||
       g_status.door == GDO_DOOR_STATE_OPEN) {
+    if (g_status.ttc_enabled == true) gdo_set_time_to_close(g_ttc_delay_s);
     return ESP_OK;
   }
 
@@ -496,7 +500,7 @@ esp_err_t gdo_door_move_to_target(uint32_t target) {
     return ESP_OK;
   }
 
-  if (duration_ms < 1000) {
+  if (duration_ms < 500) {
     ESP_LOGW(TAG, "Duration is too short, ignoring move to target");
     return ESP_ERR_INVALID_ARG;
   }
@@ -948,8 +952,12 @@ static void gdo_sync_task(void *arg) {
 
 done:
   g_status.synced = synced;
-  if (!synced && !g_protocol_forced) {
-    g_status.protocol = 0;
+  if (synced) {
+      if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1) {
+          g_status.toggle_only = true;
+      }
+  } else if (!g_protocol_forced) {
+      g_status.protocol = 0;
   }
   queue_event((gdo_event_t){GDO_EVENT_SYNC_COMPLETE});
   gdo_sync_task_handle = NULL;
@@ -962,11 +970,11 @@ done:
  */
 static void IRAM_ATTR obst_isr_handler(void *arg) {
   gdo_obstruction_stats_t *stats = (gdo_obstruction_stats_t *)arg;
+  stats->sleep_micros = esp_timer_get_time();
   ++stats->count;
 }
 
-/******************************* TIMER CALLBACKS
- * ************************************/
+/****************************** TIMER CALLBACKS ************************************/
 
 /**
  * @brief Runs every ~50ms anch checks the count of obstruction interrupts.
@@ -975,29 +983,27 @@ static void IRAM_ATTR obst_isr_handler(void *arg) {
  * changes an event of GDO_EVENT_OBST is queued.
  */
 static void obst_timer_cb(void *arg) {
+  bool pin_level = gpio_get_level(g_config.obst_in_pin);
   gdo_obstruction_stats_t *stats = (gdo_obstruction_stats_t *)arg;
   int64_t micros_now = esp_timer_get_time();
-  gdo_obstruction_state_t obs_state = GDO_OBSTRUCTION_STATE_MAX;
+  gdo_obstruction_state_t obs_state = g_status.obstruction;
 
-  if (stats->count > 3) {
-    stats->sleep_micros = 0;
-    obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
-  } else if (stats->count == 0) {
-    if (!gpio_get_level(g_config.obst_in_pin)) {
-      stats->sleep_micros = micros_now;
+    if (stats->count > 1) {
       obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
-    } else if (micros_now - stats->sleep_micros > 700000) {
-      obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
+    } else if (stats->count == 0) {
+      if (!pin_level) {
+        obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+      } else if (micros_now - stats->sleep_micros > 750000) {
+        obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
+      }
     }
-  }
 
-  stats->count = 0;
-
-  if (obs_state != GDO_OBSTRUCTION_STATE_MAX &&
-      obs_state != g_status.obstruction) {
+  if (obs_state != GDO_OBSTRUCTION_STATE_MAX && obs_state != g_status.obstruction) {
+    g_status.obstruction = obs_state;
     update_obstruction_state(obs_state);
     queue_event((gdo_event_t){GDO_EVENT_OBST});
   }
+  stats->count = 0;
 }
 
 /**
@@ -1746,6 +1752,7 @@ static void update_door_state(const gdo_door_state_t door_state) {
             }
         } else if (door_state == GDO_DOOR_STATE_OPEN) {
             g_status.door_position = 0;
+            if ((g_status.ttc_enabled == true) && (g_status.ttc_seconds == 0)) gdo_set_time_to_close(g_ttc_delay_s);
         } else if (door_state == GDO_DOOR_STATE_CLOSED) {
             g_status.door_position = 10000;
             if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) {
