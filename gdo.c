@@ -1379,7 +1379,7 @@ static void decode_packet(uint8_t *packet) {
   }
 
   gdo_command_t cmd = ((fixed >> 24) & 0xf00) | (data & 0xff);
-  uint8_t nibble = (data >> 8) & 0xff;
+  uint8_t nibble = (data >> 8) & 0x0f;
   uint8_t byte1 = (data >> 16) & 0xff;
   uint8_t byte2 = (data >> 24) & 0xff;
 
