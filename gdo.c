@@ -1240,7 +1240,7 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
       return ESP_FAIL;
     }
 
-    g_status.rolling_code++;
+    g_status.rolling_code = (g_status.rolling_code + 1) & 0xfffffff;
   } else {
     *message.packet = command;
   }
