@@ -65,8 +65,14 @@ const char *gdo_button_state_str[] = {
 
 const char *gdo_battery_state_str[] = {
     "Unknown",
-    "Charging",
-    "Full",
+    "Unknown",
+    "Unknown",
+    "Unknown",
+    "Unknown",
+    "Unknown",
+    "Charging", // 6
+    "Unknown",
+    "Full",     // 8
 };
 
 const char *gdo_learn_state_str[] = {
