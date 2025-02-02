@@ -878,16 +878,22 @@ static void gdo_sync_task(void *arg) {
     uart_flush(g_config.uart_num);
     xQueueReset(gdo_event_queue);
 
+    // We send a get openings because if we have a new client ID then the
+    // first command may be ignored, and sometime doors will throw away
+    // duplicate commands in a row.  So we want the get_status in following
+    // loop to actually work.
+    get_openings();
+
     for (;;) {
         if ((esp_timer_get_time() / 1000) > timeout) {
             synced = false;
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS((g_tx_delay_ms * 2 > 250) ? g_tx_delay_ms * 2 : 250));
+        vTaskDelay(pdMS_TO_TICKS((g_tx_delay_ms * 2 > 500) ? g_tx_delay_ms * 2 : 500));
 
         if (g_status.door == GDO_DOOR_STATE_UNKNOWN) {
-            ESP_LOGV(TAG, "SYNC TASK: Getting status");
+            ESP_LOGI(TAG, "SYNC TASK: Getting status");
             get_status();
             continue;
         } else if (sync_stage < 1) {
