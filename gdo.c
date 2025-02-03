@@ -878,16 +878,22 @@ static void gdo_sync_task(void *arg) {
     uart_flush(g_config.uart_num);
     xQueueReset(gdo_event_queue);
 
+    // We send a get openings because if we have a new client ID then the
+    // first command may be ignored, and sometime doors will throw away
+    // duplicate commands in a row.  So we want the get_status in following
+    // loop to actually work.
+    get_openings();
+
     for (;;) {
         if ((esp_timer_get_time() / 1000) > timeout) {
             synced = false;
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS((g_tx_delay_ms * 2 > 250) ? g_tx_delay_ms * 2 : 250));
+        vTaskDelay(pdMS_TO_TICKS((g_tx_delay_ms * 2 > 500) ? g_tx_delay_ms * 2 : 500));
 
         if (g_status.door == GDO_DOOR_STATE_UNKNOWN) {
-            ESP_LOGV(TAG, "SYNC TASK: Getting status");
+            ESP_LOGI(TAG, "SYNC TASK: Getting status");
             get_status();
             continue;
         } else if (sync_stage < 1) {
@@ -1240,7 +1246,7 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
       return ESP_FAIL;
     }
 
-    g_status.rolling_code++;
+    g_status.rolling_code = (g_status.rolling_code + 1) & 0xfffffff;
   } else {
     *message.packet = command;
   }
@@ -1379,7 +1385,7 @@ static void decode_packet(uint8_t *packet) {
   }
 
   gdo_command_t cmd = ((fixed >> 24) & 0xf00) | (data & 0xff);
-  uint8_t nibble = (data >> 8) & 0xff;
+  uint8_t nibble = (data >> 8) & 0x0f;
   uint8_t byte1 = (data >> 16) & 0xff;
   uint8_t byte2 = (data >> 24) & 0xff;
 
@@ -1770,8 +1776,14 @@ static void update_door_state(const gdo_door_state_t door_state) {
         xTaskNotifyGive(gdo_sync_task_handle);
     }
 
-  g_status.door = door_state;
-  queue_event((gdo_event_t){GDO_EVENT_DOOR_POSITION_UPDATE});
+  static int32_t previous_door_position = -1;
+  static int32_t previous_door_target = -1;
+  if ((door_state != g_status.door) || (previous_door_position != g_status.door_position) || (previous_door_target != g_status.door_target)) {
+    g_status.door = door_state;
+    previous_door_position = g_status.door_position;
+    previous_door_target = g_status.door_target;
+    queue_event((gdo_event_t){GDO_EVENT_DOOR_POSITION_UPDATE});
+  }
 }
 
 /**
@@ -1831,8 +1843,10 @@ inline static esp_err_t send_door_action(gdo_door_action_t action) {
  */
 inline static void update_light_state(gdo_light_state_t light_state) {
     ESP_LOGD(TAG, "Light state: %s", gdo_light_state_str[light_state]);
-    g_status.light = light_state;
-    queue_event((gdo_event_t){GDO_EVENT_LIGHT_UPDATE});
+   if (light_state != g_status.light) {
+      g_status.light = light_state;
+      queue_event((gdo_event_t){GDO_EVENT_LIGHT_UPDATE});
+    }
 }
 
 /**
@@ -1841,8 +1855,10 @@ inline static void update_light_state(gdo_light_state_t light_state) {
  */
 inline static void update_lock_state(gdo_lock_state_t lock_state) {
     ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
-    g_status.lock = lock_state;
-    queue_event((gdo_event_t){GDO_EVENT_LOCK_UPDATE});
+    if (lock_state != g_status.lock) {
+      g_status.lock = lock_state;
+      queue_event((gdo_event_t){GDO_EVENT_LOCK_UPDATE});
+    };
 }
 
 /**
@@ -1868,8 +1884,10 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state) {
  */
 inline static void update_learn_state(gdo_learn_state_t learn_state) {
     ESP_LOGD(TAG, "Learn state: %s", gdo_learn_state_str[learn_state]);
-    g_status.learn = learn_state;
-    queue_event((gdo_event_t){GDO_EVENT_LEARN_UPDATE});
+    if (learn_state != g_status.learn) {
+      g_status.learn = learn_state;
+      queue_event((gdo_event_t){GDO_EVENT_LEARN_UPDATE});
+    }
     if (learn_state == GDO_LEARN_STATE_INACTIVE && g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) {
         get_paired_devices(GDO_PAIRED_DEVICE_TYPE_ALL);
     }
