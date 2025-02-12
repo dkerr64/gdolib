@@ -2069,7 +2069,7 @@ static void update_door_state(const gdo_door_state_t door_state)
 
   if (door_state == GDO_DOOR_STATE_OPENING || door_state == GDO_DOOR_STATE_CLOSING)
   {
-    if (g_status.door_position >= 0 && g_status.close_ms > 0 && g_status.open_ms > 0)
+    if (g_status.door_position >= 0 && g_status.close_ms > 0 && g_status.open_ms > 0 && !esp_timer_is_active(door_position_sync_timer))
     {
       g_door_start_moving_ms = (uint32_t)((esp_timer_get_time() / 1000) - 1000);
       if (esp_timer_start_periodic(door_position_sync_timer, 500 * 1000) != ESP_OK)
