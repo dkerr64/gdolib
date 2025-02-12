@@ -371,8 +371,9 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
 
   uart_flush(g_config.uart_num);
 
-  if (xTaskCreate(gdo_main_task, "gdo_main_task", 4096, NULL, 15,
-                  &gdo_main_task_handle) != pdPASS)
+  // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+  if (xTaskCreatePinnedToCore(gdo_main_task, "gdo_main_task", 4096, NULL, 15,
+                              &gdo_main_task_handle, 1) != pdPASS)
   {
     return ESP_ERR_NO_MEM;
   }
@@ -423,8 +424,9 @@ esp_err_t gdo_sync(void)
 
   if (!gdo_sync_task_handle)
   {
-    if (xTaskCreate(gdo_sync_task, "gdo_task", 4096, NULL, 15,
-                    &gdo_sync_task_handle) != pdPASS)
+    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+    if (xTaskCreatePinnedToCore(gdo_sync_task, "gdo_task", 4096, NULL, 15,
+                                &gdo_sync_task_handle, 1) != pdPASS)
     {
       return ESP_ERR_NO_MEM;
     }
