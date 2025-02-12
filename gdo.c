@@ -64,7 +64,7 @@ static esp_err_t queue_event(gdo_event_t event);
 static gdo_event_callback_t g_event_callback;
 
 static gdo_status_t g_status = {
-    .protocol = 0,
+    .protocol = GDO_PROTOCOL_UNKNOWN,
     .door = GDO_DOOR_STATE_UNKNOWN,
     .light = GDO_LIGHT_STATE_MAX,
     .lock = GDO_LOCK_STATE_MAX,
@@ -306,7 +306,7 @@ esp_err_t gdo_deinit(void)
 
   g_protocol_forced = false;
   g_status.synced = false;
-  g_status.protocol = 0;
+  g_status.protocol = GDO_PROTOCOL_UNKNOWN;
   g_status.door = GDO_DOOR_STATE_UNKNOWN;
   g_status.light = GDO_LIGHT_STATE_MAX;
   g_status.lock = GDO_LOCK_STATE_MAX;
@@ -884,7 +884,7 @@ esp_err_t gdo_set_protocol(gdo_protocol_type_t protocol)
   if (protocol < GDO_PROTOCOL_MAX)
   {
     g_status.protocol = protocol;
-    g_protocol_forced = protocol > 0;
+    g_protocol_forced = protocol > GDO_PROTOCOL_UNKNOWN;
     return ESP_OK;
   }
   return ESP_ERR_INVALID_ARG;
@@ -1125,7 +1125,7 @@ done:
   }
   else if (!g_protocol_forced)
   {
-    g_status.protocol = 0;
+    g_status.protocol = GDO_PROTOCOL_UNKNOWN;
   }
   queue_event((gdo_event_t){GDO_EVENT_SYNC_COMPLETE});
   gdo_sync_task_handle = NULL;
