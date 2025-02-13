@@ -20,19 +20,25 @@
 
 static const char *TAG = "test_main";
 
-static void gdo_event_handler(const gdo_status_t* status, gdo_cb_event_t event, void *arg)
+static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, void *arg)
 {
-    switch (event) {
+    switch (event)
+    {
     case GDO_CB_EVENT_SYNCED:
         ESP_LOGI(TAG, "Synced: %s, protocol: %s", status->synced ? "true" : "false", gdo_protocol_type_to_string(status->protocol));
-        if (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2) {
+        if (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2)
+        {
             ESP_LOGI(TAG, "Client ID: %" PRIu32 ", Rolling code: %" PRIu32, status->client_id, status->rolling_code);
         }
 
-        if (!status->synced) {
-            if (gdo_set_rolling_code(status->rolling_code + 100) != ESP_OK) {
+        if (!status->synced)
+        {
+            if (gdo_set_rolling_code(status->rolling_code + 100) != ESP_OK)
+            {
                 ESP_LOGE(TAG, "Failed to set rolling code");
-            } else {
+            }
+            else
+            {
                 ESP_LOGI(TAG, "Rolling code set to %" PRIu32 ", retryng sync", status->rolling_code);
                 gdo_sync();
             }
