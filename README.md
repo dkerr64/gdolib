@@ -4,7 +4,7 @@ Garage door opener library for controlling security+ version 1.0 and 2.0 garage 
 
 
 ## Prerequisities:
-* ESP-IDF v4.4+
+* ESP-IDF v5.1+
 
 ## Building:
 * Setup esp-idf, see instructions [here](https://docs.espressif.com/projects/esp-idf/en/v5.2.1/esp32/get-started/index.html).

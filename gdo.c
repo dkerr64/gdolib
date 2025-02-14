@@ -1,5 +1,6 @@
 /* GdoLib - A library for controlling garage door openers.
  * Copyright (C) 2024  Konnected Inc.
+ * Copyright (C) 2025  Gelidus Research Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#define __STDC_FORMAT_MACROS 1
 
 #include "gdo_priv.h"
 #include "secplus.h"
@@ -22,16 +24,18 @@
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
 
+
 /***************************** LOCAL FUNCTION DECLARATIONS ****************************/
-static void obst_isr_handler(void *arg);
-static void gdo_main_task(void *arg);
-static void gdo_sync_task(void *arg);
-static void v1_status_timer_cb(void *arg);
-static void motion_detect_timer_cb(void *arg);
-static void door_position_sync_timer_cb(void *arg);
-static void scheduled_cmd_timer_cb(void *arg);
-static void scheduled_event_timer_cb(void *arg);
+static void obst_isr_handler(void* arg);
+static void gdo_main_task(void* arg);
+static void gdo_sync_task(void* arg);
+static void v1_status_timer_cb(void* arg);
+static void motion_detect_timer_cb(void* arg);
+static void door_position_sync_timer_cb(void* arg);
+static void scheduled_cmd_timer_cb(void* arg);
+static void scheduled_event_timer_cb(void* arg);
 static void obst_timer_cb(void *arg);
+static void tof_timer_cb(void* arg);
 static void get_paired_devices(gdo_paired_device_type_t type);
 static void update_light_state(gdo_light_state_t light_state);
 static void update_lock_state(gdo_lock_state_t lock_state);
@@ -47,6 +51,7 @@ static void update_paired_devices(gdo_paired_device_type_t type, uint8_t count);
 static void update_battery_state(gdo_battery_state_t battery_state);
 static void update_door_state(const gdo_door_state_t door_state);
 static void decode_packet(uint8_t *packet);
+static void update_tof_distance(uint16_t distance);
 static esp_err_t get_status();
 static esp_err_t get_openings();
 static esp_err_t send_door_action(gdo_door_action_t action);
@@ -90,6 +95,9 @@ static gdo_status_t g_status = {
     .client_id = 0x5AFE,
     .toggle_only = false,
     .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
+    .tof_timer_active = false,
+    .tof_timer_usecs = 250000,
+    .vehicle_parked_threshold = 100,
 };
 
 static bool g_protocol_forced;
@@ -102,6 +110,7 @@ static QueueHandle_t gdo_event_queue;
 static esp_timer_handle_t motion_detect_timer;
 static esp_timer_handle_t door_position_sync_timer;
 static esp_timer_handle_t obst_timer;
+static esp_timer_handle_t tof_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
@@ -122,7 +131,8 @@ esp_err_t gdo_init(const gdo_config_t *config)
 
   if (!config || config->uart_num >= UART_NUM_MAX ||
       config->uart_tx_pin >= GPIO_NUM_MAX ||
-      config->uart_rx_pin >= GPIO_NUM_MAX)
+      config->uart_rx_pin >= GPIO_NUM_MAX ||
+      config->obst_in_pin >= GPIO_NUM_MAX)
   {
     return ESP_ERR_INVALID_ARG;
   }
@@ -195,10 +205,22 @@ esp_err_t gdo_init(const gdo_config_t *config)
     err = esp_timer_create(&timer_args, &obst_timer);
 
     // Check the obstruction pulse counts every 50ms
-    err = esp_timer_start_periodic(obst_timer, 50000);
+    err = esp_timer_start_periodic(obst_timer, 100000);
 
     if (err != ESP_OK)
     {
+      return err;
+    }
+  }
+
+  if (g_status.tof_timer_active) {
+    timer_args.callback = tof_timer_cb;
+    timer_args.arg = (void *)&g_status;
+    timer_args.dispatch_method = ESP_TIMER_TASK;
+    timer_args.name = "tof_timer";
+    err = esp_timer_create(&timer_args, &tof_timer);
+    err = esp_timer_start_periodic(tof_timer, g_status.tof_timer_usecs);
+    if (err != ESP_OK) {
       return err;
     }
   }
@@ -292,8 +314,7 @@ esp_err_t gdo_deinit(void)
     motion_detect_timer = NULL;
   }
 
-  if (door_position_sync_timer)
-  {
+  if (door_position_sync_timer) {
     esp_timer_delete(door_position_sync_timer);
     door_position_sync_timer = NULL;
   }
@@ -302,6 +323,11 @@ esp_err_t gdo_deinit(void)
   {
     esp_timer_delete(obst_timer);
     obst_timer = NULL;
+  }
+
+  if (tof_timer) {
+    esp_timer_delete(tof_timer);
+    tof_timer = NULL;
   }
 
   g_protocol_forced = false;
@@ -2001,6 +2027,9 @@ static void gdo_main_task(void *arg)
       case GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT:
         cb_event = GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT;
         break;
+        case GDO_EVENT_TOF_TIMER:
+        cb_event = GDO_CB_EVENT_TOF_TIMER;
+        break;
       default:
         ESP_LOGD(TAG, "Unhandled gdo event: %d", event.gdo_event);
         break;
@@ -2424,6 +2453,23 @@ esp_err_t gdo_set_time_to_close(uint16_t time_to_close)
 }
 
 /**
+ * @brief Set the user interval timer 1 value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+*/
+esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled) {
+  esp_err_t err = ESP_OK;
+  if (interval < 1000) {
+      ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
+      err = ESP_ERR_INVALID_ARG;
+  }
+  g_status.tof_timer_active = enabled;
+  g_status.tof_timer_usecs = interval;
+  return err;
+}
+
+/**
  * @brief Updates the local paired devices count and queues an event if it has
  * changed.
  * @param type The type of paired devices to update.
@@ -2504,4 +2550,26 @@ inline static esp_err_t queue_event(gdo_event_t event)
     return ESP_ERR_NO_MEM;
   }
   return ESP_OK;
+}
+
+/************************************ TOF SENSOR *************************************/
+
+/**
+ * @brief Set the parked threshold dynamically.
+ * @param ms The minimum time in milliseconds.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid.
+*/
+esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold) {
+  esp_err_t err = ESP_OK;
+  g_status.vehicle_parked_threshold = vehicle_parked_threshold;
+  return err;
+}
+
+/**
+ * @brief time of flight sensor timer callback.
+ * @details Optional, tiggers on a distance measurement interval.
+ * If a new value is detected an event of GDO_EVENT_TOF_TIMER is queued.
+ */
+inline static void tof_timer_cb(void *arg) {
+  queue_event((gdo_event_t){GDO_EVENT_TOF_TIMER});
 }

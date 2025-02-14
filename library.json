@@ -1,0 +1,13 @@
+{
+  "name": "GDOLIB",
+  "version": "v1.1.5",
+  "description": "Library for Secplus GDO's",
+  "keywords": "security+v1, security+v2, drycontact",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GelidusResearch/gdolib.git"
+  },
+  "frameworks": "espidf",
+  "platforms": "espressif32",
+  "srcFilter": "+<*>"
+}

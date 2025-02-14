@@ -1,5 +1,6 @@
 /* GdoLib - A library for controlling garage door openers.
  * Copyright (C) 2024  Konnected Inc.
+ * Copyright (C) 2025  Gelidus Research Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -99,6 +100,7 @@ extern "C"
         GDO_EVENT_PAIRED_DEVICES_UPDATE,
         GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT,
         GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT,
+        GDO_EVENT_TOF_TIMER,
         GDO_EVENT_MAX,
     } gdo_event_type_t;
 
