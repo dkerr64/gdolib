@@ -26,16 +26,16 @@
 
 
 /***************************** LOCAL FUNCTION DECLARATIONS ****************************/
-static void obst_isr_handler(void* arg);
-static void gdo_main_task(void* arg);
-static void gdo_sync_task(void* arg);
-static void v1_status_timer_cb(void* arg);
-static void motion_detect_timer_cb(void* arg);
-static void door_position_sync_timer_cb(void* arg);
-static void scheduled_cmd_timer_cb(void* arg);
-static void scheduled_event_timer_cb(void* arg);
+static void obst_isr_handler(void *arg);
+static void gdo_main_task(void *arg);
+static void gdo_sync_task(void *arg);
+static void v1_status_timer_cb(void *arg);
+static void motion_detect_timer_cb(void *arg);
+static void door_position_sync_timer_cb(void *arg);
+static void scheduled_cmd_timer_cb(void *arg);
+static void scheduled_event_timer_cb(void *arg);
 static void obst_timer_cb(void *arg);
-static void tof_timer_cb(void* arg);
+static void tof_timer_cb(void *arg);
 static void get_paired_devices(gdo_paired_device_type_t type);
 static void update_light_state(gdo_light_state_t light_state);
 static void update_lock_state(gdo_lock_state_t lock_state);
@@ -51,7 +51,6 @@ static void update_paired_devices(gdo_paired_device_type_t type, uint8_t count);
 static void update_battery_state(gdo_battery_state_t battery_state);
 static void update_door_state(const gdo_door_state_t door_state);
 static void decode_packet(uint8_t *packet);
-static void update_tof_distance(uint16_t distance);
 static esp_err_t get_status();
 static esp_err_t get_openings();
 static esp_err_t send_door_action(gdo_door_action_t action);
