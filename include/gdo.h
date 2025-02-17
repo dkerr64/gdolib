@@ -1,5 +1,6 @@
 /* GdoLib - A library for controlling garage door openers.
  * Copyright (C) 2024  Konnected Inc.
+ * Copyright (C) 2025  Gelidus Research Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -132,6 +133,7 @@ extern "C"
         GDO_CB_EVENT_PAIRED_DEVICES,
         GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT,
         GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT,
+        GDO_CB_EVENT_TOF_TIMER,
         GDO_CB_EVENT_MAX,
     } gdo_cb_event_t;
 
@@ -157,18 +159,21 @@ extern "C"
         gdo_battery_state_t battery;          // Battery state
         gdo_learn_state_t learn;              // Learn state
         gdo_paired_device_t paired_devices;   // Paired devices
+        gdo_door_state_t last_move_direction; // Last move direction
         bool synced;                          // Synced state
-        bool ttc_enabled;                     // ttc active
+        bool ttc_enabled;                     //ttc active
+        bool toggle_only;                     // Used when the door opener only supports the toggle command.
+        bool tof_timer_active;                // ToF interval timer active
         uint16_t openings;                    // Number of openings
         uint16_t ttc_seconds;                 // Time to close in seconds
         uint16_t open_ms;                     // Time door takes to open from fully closed in milliseconds
         uint16_t close_ms;                    // Time door takes to close from fully open in milliseconds
+        uint16_t vehicle_parked_threshold;    // Distance thats considered a parked state
         int32_t door_position;                // Door position in percentage (0-10000) [OPEN-CLOSED]
         int32_t door_target;                  // Door target position in percentage (0-10000) [OPEN-CLOSED]
         uint32_t client_id;                   // Client ID
         uint32_t rolling_code;                // Rolling code
-        bool toggle_only;                     // Used when the door opener only supports the toggle command.
-        gdo_door_state_t last_move_direction; // Last move direction
+        uint32_t tof_timer_usecs;             // ToF interval timer microseconds use to triger TOF events
     } gdo_status_t;
 
     typedef struct
@@ -448,6 +453,22 @@ extern "C"
      * @param toggle_only true to enable toggle only mode, false to disable.
      */
     void gdo_set_toggle_only(bool toggle_only);
+
+    /************************************* VEHICLE Functions *****************************************/
+
+    /**
+     * @brief Set the user interval timer 1 value and enable/disable flag
+     * @param interval the interval time in micro seconds
+     * @param enabled the flag to enable or disable the timer on gdo_start
+     * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+    */
+    esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled);
+
+    /**
+     * @brief Sets the vehicle parked threshold in cm
+     * @param vehicle_parked_threshold distance measure that triggers a parked state
+    */
+    esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,7 @@
 /* GdoLib - A library for controlling garage door openers.
  * Copyright (C) 2024  Konnected Inc.
- *
+ * Copyright (C) 2025  Gelidus Research Inc.
+ * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -78,6 +79,10 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
     case GDO_CB_EVENT_UPDATE_TTC:
         ESP_LOGI(TAG, "Time to close: %d", status->ttc_seconds);
         break;
+    case GDO_CB_EVENT_TOF_TIMER:
+        ESP_LOGI(TAG, "ToF Interval Timer");
+        break;
+
     case GDO_CB_EVENT_PAIRED_DEVICES:
         ESP_LOGI(TAG, "Paired devices: %d remotes, %d keypads, %d wall controls, %d accessories, %d total",
                  status->paired_devices.total_remotes, status->paired_devices.total_keypads,
