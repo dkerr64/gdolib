@@ -24,7 +24,6 @@
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
 
-
 /***************************** LOCAL FUNCTION DECLARATIONS ****************************/
 static void obst_isr_handler(void *arg);
 static void gdo_main_task(void *arg);
@@ -212,14 +211,16 @@ esp_err_t gdo_init(const gdo_config_t *config)
     }
   }
 
-  if (g_status.tof_timer_active) {
+  if (g_status.tof_timer_active)
+  {
     timer_args.callback = tof_timer_cb;
     timer_args.arg = (void *)&g_status;
     timer_args.dispatch_method = ESP_TIMER_TASK;
     timer_args.name = "tof_timer";
     err = esp_timer_create(&timer_args, &tof_timer);
     err = esp_timer_start_periodic(tof_timer, g_status.tof_timer_usecs);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
       return err;
     }
   }
@@ -313,7 +314,8 @@ esp_err_t gdo_deinit(void)
     motion_detect_timer = NULL;
   }
 
-  if (door_position_sync_timer) {
+  if (door_position_sync_timer)
+  {
     esp_timer_delete(door_position_sync_timer);
     door_position_sync_timer = NULL;
   }
@@ -324,7 +326,8 @@ esp_err_t gdo_deinit(void)
     obst_timer = NULL;
   }
 
-  if (tof_timer) {
+  if (tof_timer)
+  {
     esp_timer_delete(tof_timer);
     tof_timer = NULL;
   }
@@ -397,8 +400,11 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
   uart_flush(g_config.uart_num);
 
   // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
-  if (xTaskCreatePinnedToCore(gdo_main_task, "gdo_main_task", 4096, NULL, 15,
-                              &gdo_main_task_handle, 1) != pdPASS)
+#ifdef CONFIG_FREERTOS_UNICORE
+  if (xTaskCreate(gdo_main_task, "gdo_main_task", 4096, NULL, 15, &gdo_main_task_handle) != pdPASS)
+#else
+  if (xTaskCreatePinnedToCore(gdo_main_task, "gdo_main_task", 4096, NULL, 15, &gdo_main_task_handle, 1) != pdPASS)
+#endif
   {
     return ESP_ERR_NO_MEM;
   }
@@ -450,8 +456,11 @@ esp_err_t gdo_sync(void)
   if (!gdo_sync_task_handle)
   {
     // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
-    if (xTaskCreatePinnedToCore(gdo_sync_task, "gdo_task", 4096, NULL, 15,
-                                &gdo_sync_task_handle, 1) != pdPASS)
+#ifdef CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(gdo_sync_task, "gdo_task", 4096, NULL, 15, &gdo_sync_task_handle) != pdPASS)
+#else
+    if (xTaskCreatePinnedToCore(gdo_sync_task, "gdo_task", 4096, NULL, 15, &gdo_sync_task_handle, 1) != pdPASS)
+#endif
     {
       return ESP_ERR_NO_MEM;
     }
@@ -2026,7 +2035,7 @@ static void gdo_main_task(void *arg)
       case GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT:
         cb_event = GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT;
         break;
-        case GDO_EVENT_TOF_TIMER:
+      case GDO_EVENT_TOF_TIMER:
         cb_event = GDO_CB_EVENT_TOF_TIMER;
         break;
       default:
@@ -2456,12 +2465,14 @@ esp_err_t gdo_set_time_to_close(uint16_t time_to_close)
  * @param interval the interval time in micro seconds
  * @param enabled the flag to enable or disable the timer on gdo_start
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
-*/
-esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled) {
+ */
+esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled)
+{
   esp_err_t err = ESP_OK;
-  if (interval < 1000) {
-      ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
-      err = ESP_ERR_INVALID_ARG;
+  if (interval < 1000)
+  {
+    ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
+    err = ESP_ERR_INVALID_ARG;
   }
   g_status.tof_timer_active = enabled;
   g_status.tof_timer_usecs = interval;
@@ -2557,8 +2568,9 @@ inline static esp_err_t queue_event(gdo_event_t event)
  * @brief Set the parked threshold dynamically.
  * @param ms The minimum time in milliseconds.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid.
-*/
-esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold) {
+ */
+esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold)
+{
   esp_err_t err = ESP_OK;
   g_status.vehicle_parked_threshold = vehicle_parked_threshold;
   return err;
@@ -2569,6 +2581,7 @@ esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold) {
  * @details Optional, tiggers on a distance measurement interval.
  * If a new value is detected an event of GDO_EVENT_TOF_TIMER is queued.
  */
-inline static void tof_timer_cb(void *arg) {
+inline static void tof_timer_cb(void *arg)
+{
   queue_event((gdo_event_t){GDO_EVENT_TOF_TIMER});
 }
