@@ -23,6 +23,7 @@
 
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
+#include "gdoSoftwareSerial.h"
 
 static const char *TAG = "gdolib";
 
@@ -125,6 +126,8 @@ static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = GDO_MIN_COMMAND_INTERVAL_MS;
 static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
+static MessageBufferHandle_t serial_tx_buffer;
+static TaskHandle_t serial_task_handle;
 
 static gdo_obstruction_stats_t obst_stats = {
     .count = 0,
@@ -329,7 +332,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
     if (g_config.dc_discrete_close_pin)
       gpio_set_level(g_config.dc_discrete_close_pin, 0);
   }
-  else
+  else if (!g_config.use_sw_serial)
   {
     // dry contact does not require serial comms
     // Begin in secplus protocol v1 as its the easiest to detect.
@@ -369,6 +372,10 @@ esp_err_t gdo_init(const gdo_config_t *config)
     {
       return err;
     }
+  }
+  else
+  {
+    ESP_LOGI(TAG, "Using software emulation of serial port instead of h/w UART");
   }
 
   gdo_tx_queue = xQueueCreate(16, sizeof(gdo_tx_message_t));
@@ -506,7 +513,14 @@ esp_err_t gdo_deinit(void)
     goto done;
   }
 
-  err = uart_driver_delete(g_config.uart_num);
+  if (g_config.use_sw_serial)
+  {
+    err = serial_stop();
+  }
+  else
+  {
+    err = uart_driver_delete(g_config.uart_num);
+  }
 
 done:
   return err;
@@ -531,23 +545,41 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
 
   if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
   {
-    err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
-                              &gdo_event_queue, 0);
-    if (err != ESP_OK)
+    // dry contact does not require serial comms
+    if (g_config.use_sw_serial)
     {
-      return err;
-    }
-
-    uart_flush(g_config.uart_num);
-
-    // Re-apply inversion after driver install, which may reset hardware state on some IDF variants
-    if (g_config.invert_uart)
-    {
-      err = uart_set_line_inverse(g_config.uart_num,
-                                  UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+      gdo_event_queue = xQueueCreate(16, sizeof(gdo_event_t));
+      if (!gdo_event_queue)
+      {
+        return ESP_ERR_NO_MEM;
+      }
+      esp_err_t err = serial_start(gdo_event_queue, &serial_tx_buffer, &serial_task_handle, g_config.uart_rx_pin, g_config.uart_tx_pin);
       if (err != ESP_OK)
       {
         return err;
+      }
+      serial_set_protocol(g_status.protocol);
+    }
+    else
+    {
+      err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
+                                &gdo_event_queue, 0);
+      if (err != ESP_OK)
+      {
+        return err;
+      }
+
+      uart_flush(g_config.uart_num);
+
+      // Re-apply inversion after driver install, which may reset hardware state on some IDF variants
+      if (g_config.invert_uart)
+      {
+        err = uart_set_line_inverse(g_config.uart_num,
+                                  UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+        if (err != ESP_OK)
+        {
+          return err;
+        }
       }
     }
   }
@@ -1257,9 +1289,16 @@ static void gdo_sync_task(void *arg)
   }
 
     if (g_status.protocol != GDO_PROTOCOL_SEC_PLUS_V2) {
-        uart_set_baudrate(g_config.uart_num, 1200);
-        uart_set_parity(g_config.uart_num, UART_PARITY_EVEN);
-        uart_flush(g_config.uart_num);
+        if (g_config.use_sw_serial)
+        {
+          serial_set_protocol(GDO_PROTOCOL_SEC_PLUS_V1);
+        }
+        else
+        {
+          uart_set_baudrate(g_config.uart_num, 1200);
+          uart_set_parity(g_config.uart_num, UART_PARITY_EVEN);
+          uart_flush(g_config.uart_num);
+        }
         xQueueReset(gdo_event_queue);
 
         // Delay forever if there is a smart panel connected to allow it to come online and sync before we do anything.
@@ -1280,7 +1319,10 @@ static void gdo_sync_task(void *arg)
                 synced = false;
                 goto done;
             } else {
-                uart_flush(g_config.uart_num);
+                if (!g_config.use_sw_serial)
+                {
+                  uart_flush(g_config.uart_num);
+                }
                 xQueueReset(gdo_event_queue);
                 esp_timer_start_periodic(v1_status_timer, 250 * 1000);
             }
@@ -1304,9 +1346,16 @@ static void gdo_sync_task(void *arg)
     uint32_t timeout = esp_timer_get_time() / 1000 + 5000;
     uint8_t sync_stage = 0;
     g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V2;
-    uart_set_baudrate(g_config.uart_num, 9600);
-    uart_set_parity(g_config.uart_num, UART_PARITY_DISABLE);
-    uart_flush(g_config.uart_num);
+    if (g_config.use_sw_serial)
+    {
+      serial_set_protocol(GDO_PROTOCOL_SEC_PLUS_V2);
+    }
+    else
+    {
+      uart_set_baudrate(g_config.uart_num, 9600);
+      uart_set_parity(g_config.uart_num, UART_PARITY_DISABLE);
+      uart_flush(g_config.uart_num);
+    }
     xQueueReset(gdo_event_queue);
 
     for (;;) {
@@ -1784,11 +1833,33 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
 }
 
 /**
- * @brief Transmits a packet to the GDO from the UART.
+ * @brief Transmits a packet to the GDO from the UART or s/w serial.
  * @param packet The packet to send to the GDO.
- * @return ESP_OK on success, other non-zero errors from the UART driver.
+ * @return ESP_OK on success, other non-zero errors from the UART or s/w serial driver.
  */
-static esp_err_t transmit_packet(uint8_t *packet)
+static esp_err_t transmit_packet_sw(uint8_t *packet)
+{
+  uint32_t rc;
+  serial_transmit_t tx_packet;
+
+  tx_packet.sendingTask = xTaskGetCurrentTaskHandle();
+  tx_packet.size = (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) ? 19 : 1;
+  memcpy(tx_packet.packet, packet, tx_packet.size);
+
+  // Queue up the packet for the software serial task to pick off and process
+  if (!xMessageBufferSend(serial_tx_buffer, &tx_packet, sizeof(tx_packet), portMAX_DELAY))
+  {
+    ESP_LOGE(TAG, "s/w serial TX buffer full!");
+    return ESP_ERR_NO_MEM;
+  }
+  // Notify the s/w serial task that packet is waiting to be sent
+  xTaskNotify(serial_task_handle, 0, eSetValueWithOverwrite);
+  // Wait for the s/w serial task to notify that packet is sent.
+  xTaskNotifyWait(0, 0, &rc, portMAX_DELAY);
+  return (esp_err_t)rc;
+}
+
+static esp_err_t transmit_packet_hw(uint8_t *packet)
 {
   esp_err_t err = ESP_OK;
 
@@ -1842,12 +1913,6 @@ static esp_err_t transmit_packet(uint8_t *packet)
     // flush the rx buffer since it will now have the data we just sent.
     err = uart_flush_input(g_config.uart_num);
   }
-  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
-  {
-    // packet[0] is the GPIO pin number
-    // packet[1] is what to set the pin to.
-    gpio_set_level(packet[0], packet[1]);
-  }
   else
   { // secplus v1, just send the byte
     if (uart_write_bytes(g_config.uart_num, packet, 1) < 0)
@@ -1857,6 +1922,24 @@ static esp_err_t transmit_packet(uint8_t *packet)
   }
 
   return err;
+}
+
+static esp_err_t transmit_packet(uint8_t *packet)
+{
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // packet[0] is the GPIO pin number
+    // packet[1] is what to set the pin to.
+    return gpio_set_level(packet[0], packet[1]);
+  }
+  else if (g_config.use_sw_serial)
+  {
+    return transmit_packet_sw(packet);
+  }
+  else
+  {
+    return transmit_packet_hw(packet);
+  }
 }
 
 /**
@@ -1875,7 +1958,8 @@ static void decode_v1_packet(uint8_t *packet)
     return;
   }
 
-  if (cmd == V1_CMD_QUERY_DOOR_STATUS)
+  // check that we are not receiving echo back of our sequence of sync status commands / wall plate emulation
+  if ((cmd == V1_CMD_QUERY_DOOR_STATUS && g_status.synced) || ((cmd == V1_CMD_QUERY_DOOR_STATUS && !g_status.synced) && resp != V1_CMD_QUERY_OTHER_STATUS))
   {
     gdo_door_state_t door_state = GDO_DOOR_STATE_UNKNOWN;
     uint8_t val = resp & 0x7;
@@ -1906,12 +1990,12 @@ static void decode_v1_packet(uint8_t *packet)
   {
     queue_v1_command(V1_CMD_QUERY_OTHER_STATUS);
   }
-  else if (cmd == V1_CMD_QUERY_OTHER_STATUS)
+  else if ((cmd == V1_CMD_QUERY_OTHER_STATUS && g_status.synced) || ((cmd == V1_CMD_QUERY_OTHER_STATUS && !g_status.synced) && resp != V1_CMD_QUERY_DOOR_STATUS && resp != V1_CMD_QUERY_OTHER_STATUS && resp != V1_CMD_OBSTRUCTION))
   {
     update_light_state((gdo_light_state_t)((resp >> 2) & 1));
     update_lock_state((gdo_lock_state_t)((~resp >> 3) & 1));
   }
-  else if (cmd == V1_CMD_OBSTRUCTION)
+  else if ((cmd == V1_CMD_OBSTRUCTION && g_status.synced) || ((cmd == V1_CMD_OBSTRUCTION && !g_status.synced) && resp != V1_CMD_QUERY_DOOR_STATUS))
   {
     if (g_config.obst_from_status)
       update_obstruction_state(resp == 0 ? GDO_OBSTRUCTION_STATE_CLEAR : GDO_OBSTRUCTION_STATE_OBSTRUCTED);
@@ -1926,7 +2010,7 @@ static void decode_v1_packet(uint8_t *packet)
   }
   else
   {
-    ESP_LOGD(TAG, "Unhandled command: %02x, resp: %02x", cmd, resp);
+    ESP_LOGD(TAG, "Unhandled command: %02x, resp: %02x, synced: %d", cmd, resp, g_status.synced);
   }
 }
 
@@ -1954,7 +2038,7 @@ static void decode_packet(uint8_t *packet)
   }
   else
   {
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "received rolling=%07" PRIx32 " fixed=%010" PRIx64
              " data=%08" PRIx32,
              rolling, fixed, data);
@@ -2054,6 +2138,37 @@ static void gdo_main_task(void *arg)
 
       switch ((int)event.gdo_event)
       {
+      case SERIAL_EVENT_DATA:
+      {
+        if (!g_status.protocol)
+        {
+          uint16_t rx_packet_size = event.serial_event.size;
+          if (rx_packet_size == 2)
+          {
+            ESP_LOGD(TAG, "Received %u bytes, using protocol V1", rx_packet_size);
+            g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V1;
+          }
+          else if (rx_packet_size == 19)
+          {
+            ESP_LOGD(TAG, "Received %u bytes, using protocol V2", rx_packet_size);
+            g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V2;
+          }
+          else
+          {
+            ESP_LOGD(TAG, "Received %u bytes, unknown protocol", rx_packet_size);
+          }
+        }
+        print_buffer(g_status.protocol, event.serial_event.packet, false);
+        if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
+        {
+          decode_packet(event.serial_event.packet);
+        }
+        else
+        {
+          decode_v1_packet(event.serial_event.packet);
+        }
+        break;
+      }
       case UART_BREAK:
         // All messages from the GDO start with a break if using V2 protocol.
         if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
