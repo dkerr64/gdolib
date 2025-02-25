@@ -28,6 +28,7 @@
 static void obst_isr_handler(void *arg);
 static void gdo_main_task(void *arg);
 static void gdo_sync_task(void *arg);
+static void gdo_contact_task(void *arg);
 static void v1_status_timer_cb(void *arg);
 static void motion_detect_timer_cb(void *arg);
 static void door_position_sync_timer_cb(void *arg);
@@ -51,6 +52,7 @@ static void update_paired_devices(gdo_paired_device_type_t type, uint8_t count);
 static void update_battery_state(gdo_battery_state_t battery_state);
 static void update_door_state(const gdo_door_state_t door_state);
 static void decode_packet(uint8_t *packet);
+static void decode_dry_contact(gdo_contact_type_t contact, uint32_t level);
 static esp_err_t get_status();
 static esp_err_t get_openings();
 static esp_err_t send_door_action(gdo_door_action_t action);
@@ -106,6 +108,7 @@ static gdo_config_t g_config;
 static uint32_t g_door_start_moving_ms;
 static TaskHandle_t gdo_main_task_handle;
 static TaskHandle_t gdo_sync_task_handle;
+static TaskHandle_t gdo_contact_task_handle[GDO_CONTACT_MAX - 1];
 static QueueHandle_t gdo_tx_queue;
 static QueueHandle_t gdo_event_queue;
 static esp_timer_handle_t motion_detect_timer;
@@ -135,7 +138,11 @@ esp_err_t gdo_init(const gdo_config_t *config)
       config->uart_tx_pin >= GPIO_NUM_MAX ||
       config->uart_rx_pin >= GPIO_NUM_MAX ||
       config->obst_in_pin >= GPIO_NUM_MAX ||
-      config->obst_tp_pin >= GPIO_NUM_MAX)
+      config->obst_tp_pin >= GPIO_NUM_MAX ||
+      config->dc_open_pin >= GPIO_NUM_MAX ||
+      config->dc_close_pin >= GPIO_NUM_MAX ||
+      config->dc_discrete_open_pin >= GPIO_NUM_MAX ||
+      config->dc_discrete_close_pin >= GPIO_NUM_MAX)
   {
     return ESP_ERR_INVALID_ARG;
   }
@@ -146,6 +153,10 @@ esp_err_t gdo_init(const gdo_config_t *config)
   }
 
   g_config = *config;
+
+  // Initialize a default dry contact debounce if not set.
+  if (g_config.dc_debounce_ms == 0)
+    g_config.dc_debounce_ms = GDO_DRY_CONTACT_DEBOUNCE_MS;
 
   esp_timer_create_args_t timer_args = {.callback = motion_detect_timer_cb,
                                         .arg = NULL,
@@ -169,18 +180,14 @@ esp_err_t gdo_init(const gdo_config_t *config)
 
   if ((g_config.obst_in_pin > 0) && !g_config.obst_from_status)
   {
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = (1ULL << g_config.obst_in_pin);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    gdo_obstruction_stats_t *obst_stats =
-        (gdo_obstruction_stats_t *)calloc(1, sizeof(gdo_obstruction_stats_t));
-    if (!obst_stats)
-    {
-      return ESP_ERR_NO_MEM;
-    }
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << g_config.obst_in_pin),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
+    };
+    static gdo_obstruction_stats_t obst_stats;
 
     err = gpio_config(&io_conf);
     if (err != ESP_OK)
@@ -194,15 +201,14 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
 
-    err = gpio_isr_handler_add(g_config.obst_in_pin, obst_isr_handler,
-                               (void *)obst_stats);
+    err = gpio_isr_handler_add(g_config.obst_in_pin, obst_isr_handler, (void *)&obst_stats);
     if (err != ESP_OK)
     {
       return err;
     }
 
     timer_args.callback = obst_timer_cb;
-    timer_args.arg = (void *)obst_stats;
+    timer_args.arg = (void *)&obst_stats;
     timer_args.dispatch_method = ESP_TIMER_TASK;
     timer_args.name = "obst_timer";
     err = esp_timer_create(&timer_args, &obst_timer);
@@ -211,6 +217,21 @@ esp_err_t gdo_init(const gdo_config_t *config)
     err = esp_timer_start_periodic(obst_timer, 100000);
 
     if (err != ESP_OK)
+    {
+      return err;
+    }
+  }
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // dry contact protocol requires obstruction sensor input pin
+    ESP_LOGE(TAG, "Failed to initialize GDOLIB... dry contact protocol requires obstruction sensor GPIO pin");
+    return ESP_FAIL;
+  }
+  else if (g_config.dc_close_pin > 0 || g_config.dc_open_pin > 0)
+  {
+    // we need to install gpio isr service for later use
+    err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
     {
       return err;
     }
@@ -232,14 +253,17 @@ esp_err_t gdo_init(const gdo_config_t *config)
 
   if (g_config.obst_tp_pin > 0)
   {
-    gpio_config_t io_conf = {};
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << g_config.obst_tp_pin);
-    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << g_config.obst_tp_pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
     esp_err_t err = gpio_config(&io_conf); // Configure the GPIO pin
     if (err != ESP_OK)
     {
-        return err;
+      return err;
     }
   }
 
@@ -257,40 +281,64 @@ esp_err_t gdo_init(const gdo_config_t *config)
     }
   }
 
-  // Begin in secplus protocol v1 as its the easiest to detect.
-  uart_config_t uart_config = {
-      .baud_rate = 1200,
-      .data_bits = UART_DATA_8_BITS,
-      .parity = UART_PARITY_EVEN,
-      .stop_bits = UART_STOP_BITS_1,
-      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-      uart_config.source_clk = UART_SCLK_DEFAULT,
-#endif
-  };
-
-  err = uart_param_config(g_config.uart_num, &uart_config);
-  if (err != ESP_OK)
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
   {
-    return err;
+    // Need to setup the pins we will use for dry-contact output
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << g_config.uart_tx_pin) |
+                        ((g_config.dc_discrete_open_pin) ? (1ULL << g_config.dc_discrete_open_pin) : 0) |
+                        ((g_config.dc_discrete_close_pin) ? (1ULL << g_config.dc_discrete_close_pin) : 0),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    err = gpio_config(&io_conf);
+    if (err != ESP_OK)
+    {
+      ESP_LOGE(TAG, "Failed to configure dry-contact GPIO output pins");
+      return err;
+    }
   }
-
-  if (g_config.invert_uart)
+  else
   {
-    err = uart_set_line_inverse(g_config.uart_num,
-                                UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+    // dry contact does not require serial comms
+    // Begin in secplus protocol v1 as its the easiest to detect.
+    uart_config_t uart_config = {
+        .baud_rate = 1200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_EVEN,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+        uart_config.source_clk = UART_SCLK_DEFAULT,
+#endif
+    };
+
+    err = uart_param_config(g_config.uart_num, &uart_config);
     if (err != ESP_OK)
     {
       return err;
     }
-  }
 
-  err = uart_set_pin(g_config.uart_num, g_config.uart_tx_pin,
-                     g_config.uart_rx_pin, UART_PIN_NO_CHANGE,
-                     UART_PIN_NO_CHANGE);
-  if (err != ESP_OK)
-  {
-    return err;
+    if (g_config.invert_uart)
+    {
+      err = uart_set_line_inverse(g_config.uart_num,
+                                  UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+      if (err != ESP_OK)
+      {
+        return err;
+      }
+    }
+
+    err = uart_set_pin(g_config.uart_num, g_config.uart_tx_pin,
+                       g_config.uart_rx_pin, UART_PIN_NO_CHANGE,
+                       UART_PIN_NO_CHANGE);
+    if (err != ESP_OK)
+    {
+      return err;
+    }
   }
 
   gdo_tx_queue = xQueueCreate(16, sizeof(gdo_tx_message_t));
@@ -326,6 +374,15 @@ esp_err_t gdo_deinit(void)
   {
     vTaskDelete(gdo_sync_task_handle);
     gdo_sync_task_handle = NULL;
+  }
+
+  for (int i = 0; i < GDO_CONTACT_MAX - 1; i++)
+  {
+    if (gdo_contact_task_handle[i])
+    {
+      vTaskDelete(gdo_contact_task_handle[i]);
+      gdo_contact_task_handle[i] = NULL;
+    }
   }
 
   if (gdo_tx_queue)
@@ -422,20 +479,67 @@ done:
  */
 esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
 {
+  esp_err_t err = ESP_OK;
   if (!gdo_tx_queue)
   { // using this as a proxy for the driver being initialized
     return ESP_ERR_INVALID_STATE;
   }
   g_user_cb_arg = user_arg;
 
-  esp_err_t err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
-                                      &gdo_event_queue, 0);
-  if (err != ESP_OK)
+  if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
   {
-    return err;
+    // dry contact does not require serial comms
+    err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
+                              &gdo_event_queue, 0);
+    if (err != ESP_OK)
+    {
+      return err;
+    }
+
+    uart_flush(g_config.uart_num);
+  }
+  else
+  {
+    gdo_event_queue = xQueueCreate(16, sizeof(gdo_event_t));
+    if (!gdo_event_queue)
+    {
+      return ESP_ERR_NO_MEM;
+    }
   }
 
-  uart_flush(g_config.uart_num);
+  if (g_config.dc_open_pin > 0)
+  {
+    // Test for > 0 even though zero is valid GPIO pin, but for GDO use case, we require pin to be > 0
+    static gdo_contact_t info;
+    info.contact = GDO_CONTACT_DOOR_OPEN;
+    info.pin = g_config.dc_open_pin;
+    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+#ifdef CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(gdo_contact_task, "gdo_open_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1]) != pdPASS)
+#else
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_open_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1], 1) != pdPASS)
+#endif
+    {
+      return ESP_ERR_NO_MEM;
+    }
+  }
+
+  if (g_config.dc_close_pin > 0)
+  {
+    // Test for > 0 even though zero is valid GPIO pin, but for GDO use case, we require pin to be > 0
+    static gdo_contact_t info;
+    info.contact = GDO_CONTACT_DOOR_CLOSE;
+    info.pin = g_config.dc_close_pin;
+    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+#ifdef CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(gdo_contact_task, "gdo_close_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1]) != pdPASS)
+#else
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_close_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1], 1) != pdPASS)
+#endif
+    {
+      return ESP_ERR_NO_MEM;
+    }
+  }
 
   // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
@@ -485,6 +589,12 @@ esp_err_t gdo_get_status(gdo_status_t *status)
  */
 esp_err_t gdo_sync(void)
 {
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // dry contact cannot do a sync, door status remains unknown until some activity
+    return ESP_OK;
+  }
+
   if (!gdo_main_task_handle ||
       g_status.synced)
   { // using this as a proxy for the driver being started
@@ -1218,32 +1328,28 @@ static void IRAM_ATTR obst_isr_handler(void *arg)
 /****************************** TIMER CALLBACKS ************************************/
 
 /**
- * @brief Runs every ~50ms anch checks the count of obstruction interrupts.
- * @details 3 or more interrupts in 50ms is considered clear, 0 with the pin low
+ * @brief Runs every 100ms anch checks the count of obstruction interrupts.
+ * @details 1 or more interrupts in 100ms is considered clear, 0 with the pin low
  * is asleep, and 0 with the pin high is obstructed. When the obstruction state
  * changes an event of GDO_EVENT_OBST is queued.
  */
 static void obst_timer_cb(void *arg)
 {
-  bool pin_level = gpio_get_level(g_config.obst_in_pin);
   gdo_obstruction_stats_t *stats = (gdo_obstruction_stats_t *)arg;
   int64_t micros_now = esp_timer_get_time();
   gdo_obstruction_state_t obs_state = g_status.obstruction;
 
-  if (stats->count > 1)
+  if (stats->count >= 1)
   {
     obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
   }
-  else if (stats->count == 0)
+  else if ((stats->count == 0) && (micros_now - stats->sleep_micros < 750000))
   {
-    if (!pin_level)
-    {
-      obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
-    }
-    else if (micros_now - stats->sleep_micros > 750000)
-    {
-      obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
-    }
+    obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+  }
+  else
+  {
+    obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
   }
 
   if (obs_state != GDO_OBSTRUCTION_STATE_MAX && obs_state != g_status.obstruction)
@@ -1263,9 +1369,9 @@ static void obst_timer_cb(void *arg)
  */
 inline static void obst_test_pulse_timer_cb(void *arg)
 {
-    static bool last_set_value = false;
-    last_set_value = !last_set_value;
-    gpio_set_level(g_config.obst_tp_pin, last_set_value);
+  static bool last_set_value = false;
+  last_set_value = !last_set_value;
+  gpio_set_level(g_config.obst_tp_pin, last_set_value);
 }
 
 /**
@@ -1482,6 +1588,26 @@ static esp_err_t gdo_v1_toggle_cmd(gdo_v1_command_t cmd)
 }
 
 /**
+ * @brief dry-contact toggle a pin. This function will set a pin to level 1 and schedule a reset to zero
+ * @param pin The GPIO pin number
+ * @return ESP_OK on success, or return code from queue_command()
+ */
+static esp_err_t gdo_dc_toggle_pin(gpio_num_t pin)
+{
+  esp_err_t err = queue_command(pin, 1, 0, 0);
+  if (err == ESP_OK)
+  {
+    gdo_sched_cmd_args_t args = {
+        .cmd = (uint32_t)pin,
+        .door_cmd = false,
+        .nibble = 0,
+    };
+    return schedule_command(&args, 500 * 1000);
+  }
+  return err;
+}
+
+/**
  * @brief Wrapper for sending secplus v1 commands
  * @param command The command to send to the GDO.
  * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full.
@@ -1533,6 +1659,11 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
     }
 
     g_status.rolling_code = (g_status.rolling_code + 1) & 0xfffffff;
+  }
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    message.packet[0] = command;
+    message.packet[1] = nibble; // what to set pin too
   }
   else
   {
@@ -1606,6 +1737,12 @@ static esp_err_t transmit_packet(uint8_t *packet)
 
     // flush the rx buffer since it will now have the data we just sent.
     err = uart_flush_input(g_config.uart_num);
+  }
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // packet[0] is the GPIO pin number
+    // packet[1] is what to set the pin to.
+    gpio_set_level(packet[0], packet[1]);
   }
   else
   { // secplus v1, just send the byte
@@ -2030,8 +2167,9 @@ static void gdo_main_task(void *arg)
           ESP_LOGE(TAG, "Failed to TX message: %s - %s", g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 ? cmd_to_string(tx_message.cmd) : v1_cmd_to_string(tx_message.cmd), esp_err_to_name(err));
           // TODO: send message to app about the failure
         }
-        else
+        else if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
         {
+          // if dry contact then last_tx_time and send command is irrelevant
           ESP_LOGD(TAG, "Sent command: %s", g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 ? cmd_to_string(tx_message.cmd) : v1_cmd_to_string(tx_message.cmd));
           last_tx_time = esp_timer_get_time() / 1000;
         }
@@ -2250,6 +2388,33 @@ inline static esp_err_t get_openings()
 }
 
 /**
+ * @brief Sends a door action command to a dry-contact GDO.
+ * @param action The action to send to the GDO.
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if
+ * the encoding fails.
+ */
+inline static esp_err_t send_door_action_dc(gdo_door_action_t action)
+{
+  switch (action)
+  {
+  case GDO_DOOR_ACTION_OPEN:
+    if (g_config.dc_discrete_open_pin)
+      gdo_dc_toggle_pin(g_config.dc_discrete_open_pin);
+    gdo_dc_toggle_pin(g_config.uart_tx_pin);
+    break;
+  case GDO_DOOR_ACTION_CLOSE:
+    if (g_config.dc_discrete_close_pin)
+      gdo_dc_toggle_pin(g_config.dc_discrete_close_pin);
+    gdo_dc_toggle_pin(g_config.uart_tx_pin);
+    break;
+  default:
+    gdo_dc_toggle_pin(g_config.uart_tx_pin);
+    break;
+  }
+  return ESP_OK;
+}
+
+/**
  * @brief Sends a door action command to the GDO.
  * @param action The action to send to the GDO.
  * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if
@@ -2258,7 +2423,11 @@ inline static esp_err_t get_openings()
 inline static esp_err_t send_door_action(gdo_door_action_t action)
 {
   esp_err_t err = ESP_OK;
-  if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    return send_door_action_dc(action);
+  }
+  else if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
   {
     return gdo_v1_toggle_cmd(V1_CMD_TOGGLE_DOOR_PRESS);
   }
@@ -2656,3 +2825,232 @@ inline static void tof_timer_cb(void *arg)
   queue_event((gdo_event_t){GDO_EVENT_TOF_TIMER});
 }
 
+/**
+ * @brief Handles the dry contact interrupts
+ */
+static void IRAM_ATTR gdo_contact_isr_handler(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+
+  portENTER_CRITICAL_ISR(&info->mux);
+  if (info->inDebounce)
+  {
+    // if interrupt received while we are in a debounce check period,
+    // keep track that it occurred and ignore it.
+    info->count++;
+    info->countTimestamp = esp_timer_get_time();
+    portEXIT_CRITICAL_ISR(&info->mux);
+    return;
+  }
+  else
+  {
+    // keep track that we are notifying task of interrupt (and therefore entering debounce period)
+    info->inDebounce = true;
+    info->level = gpio_get_level(info->pin);
+    info->count = 0;
+    info->countTimestamp = info->levelTimestamp = esp_timer_get_time();
+    portEXIT_CRITICAL_ISR(&info->mux);
+
+    BaseType_t xHigherPriorityTaskWoken;
+    xTaskNotifyFromISR(info->notifyTask, 0, eNoAction, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    return;
+  }
+}
+
+/**
+ * @brief If we received a interrupt from the GPIO pin, wait for debounce
+ * mitigation and check that the pin level is stable before declaring it good
+ */
+static void contact_debounce_timer_cb(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+
+  portENTER_CRITICAL(&info->mux);
+  uint32_t pinLevel = gpio_get_level(info->pin);
+  uint32_t count = info->count;
+  uint32_t bounceDuration = (int32_t)(info->countTimestamp - info->levelTimestamp);
+  if (pinLevel == info->level)
+  {
+    // Current pin level same as when timer was started, so assume that
+    // state is stable and we can notify main GDO task.
+    info->inDebounce = false;
+    portEXIT_CRITICAL(&info->mux);
+    ESP_LOGD(TAG, "Level of pin %d (%s) is %d. Interrupts during debounce: %d (%ld.%03ldms)",
+             info->pin,
+             (info->pin == g_config.dc_open_pin) ? "open sensor" : "closed sensor",
+             pinLevel,
+             count, bounceDuration / 1000UL, bounceDuration % 1000UL);
+    decode_dry_contact(info->contact, pinLevel);
+  }
+  else
+  {
+    // pin level is different from when timer started, so assume that
+    // state is NOT stable... wait again using whatever the state is now.
+    info->inDebounce = true;
+    info->level = pinLevel;
+    portEXIT_CRITICAL(&info->mux);
+    ESP_LOGD(TAG, "Debounce of pin %d (%s) not stable, wait for another %dms. Interrupts: %d (%ld.%03ldms)",
+             info->pin,
+             (info->pin == g_config.dc_open_pin) ? "open sensor" : "closed sensor",
+             g_config.dc_debounce_ms,
+             count, bounceDuration / 1000UL, bounceDuration % 1000UL);
+    esp_timer_start_once(info->debounceTimer, g_config.dc_debounce_ms * 1000);
+  }
+}
+
+/**
+ * @brief This task stated to handle change in state of dry contact sensors
+ * @details This task will...
+ */
+static void gdo_contact_task(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+  esp_err_t err = ESP_OK;
+
+  ESP_LOGI(TAG, "Initialize dry contact ISR and Task for pin: %d (%s)", info->pin, (info->pin == g_config.dc_open_pin) ? "open sensor" : "closed sensor");
+
+  info->notifyTask = xTaskGetCurrentTaskHandle();
+  info->level = UINT_MAX;
+  portMUX_INITIALIZE(&info->mux);
+  info->inDebounce = false;
+  info->countTimestamp = 0;
+  info->levelTimestamp = 0;
+
+  esp_timer_create_args_t timer_args = {
+      .callback = contact_debounce_timer_cb,
+      .arg = info,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "contact_debounce_timer"};
+
+  err = esp_timer_create(&timer_args, &info->debounceTimer);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to create contact debounce timer for GPIO pin %d, terminating task", info->pin);
+    return;
+  }
+
+  // Install ISR handler for dry contact pin
+  gpio_config_t io_conf = {
+      .pin_bit_mask = (1ULL << info->pin),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_ANYEDGE,
+  };
+
+  err = gpio_config(&io_conf);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to configure GPIO for pin %d, terminating task", info->pin);
+    return;
+  }
+
+  err = gpio_isr_handler_add(info->pin, gdo_contact_isr_handler, (void *)info);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to install ISR handler for GPIO pin %d, terminating task", info->pin);
+    return;
+  }
+
+  // Notify ourselves... so we will immediately process current GPIO level to set initial state
+  info->level = gpio_get_level(info->pin);
+  xTaskNotify(info->notifyTask, 0, eNoAction);
+
+  for (;;)
+  {
+    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+    ESP_LOGD(TAG, "Wake up for GPIO pin %d (%s), level is %d", info->pin, (info->pin == g_config.dc_open_pin) ? "open sensor" : "closed sensor", info->level);
+    esp_timer_stop(info->debounceTimer); // Just to be super safe, should not be active.
+    esp_timer_start_once(info->debounceTimer, g_config.dc_debounce_ms * 1000);
+  }
+}
+
+/**
+ * @brief determine door state (open/opening/closing/closed) from dry contact states
+ */
+void decode_dry_contact(gdo_contact_type_t contact, uint32_t level)
+{
+  static bool dryContactDoorOpen = false;
+  static bool dryContactDoorClose = false;
+  static bool previousDryContactDoorOpen = false;
+  static bool previousDryContactDoorClose = false;
+
+  if (contact == GDO_CONTACT_DOOR_OPEN)
+  {
+    if (level)
+    {
+      dryContactDoorOpen = false;
+      ESP_LOGD(TAG, "Open sensor released");
+    }
+    else
+    {
+      dryContactDoorOpen = true;
+      ESP_LOGD(TAG, "Open sensor pressed");
+    }
+  }
+
+  if (contact == GDO_CONTACT_DOOR_CLOSE)
+  {
+    if (level)
+    {
+      dryContactDoorClose = false;
+      ESP_LOGD(TAG, "Close sensor released");
+    }
+    else
+    {
+      dryContactDoorClose = true;
+      ESP_LOGD(TAG, "Close sensor pressed");
+    }
+  }
+
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    if (dryContactDoorOpen)
+    {
+      update_door_state(GDO_DOOR_STATE_OPEN);
+    }
+
+    if (dryContactDoorClose)
+    {
+      update_door_state(GDO_DOOR_STATE_CLOSED);
+    }
+
+    if (!dryContactDoorClose && !dryContactDoorOpen)
+    {
+      if (previousDryContactDoorClose)
+      {
+        update_door_state(GDO_DOOR_STATE_OPENING);
+      }
+      else if (previousDryContactDoorOpen)
+      {
+        update_door_state(GDO_DOOR_STATE_CLOSING);
+      }
+      else
+      {
+        update_door_state(GDO_DOOR_STATE_UNKNOWN);
+      }
+    }
+  }
+  else
+  {
+    // Dry contacts are repurposed as optional door open/close when we
+    // are using Sec+ 1.0 or Sec+ 2.0 door control type. You must call gdo_init() with
+    // values set for dc_open_pin and dc_close_pin in the config struct.
+    if (dryContactDoorOpen)
+    {
+      gdo_door_open();
+      dryContactDoorOpen = false;
+    }
+
+    if (dryContactDoorClose)
+    {
+
+      gdo_door_close();
+      dryContactDoorClose = false;
+    }
+  }
+
+  previousDryContactDoorOpen = dryContactDoorOpen;
+  previousDryContactDoorClose = dryContactDoorClose;
+}
