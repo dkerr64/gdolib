@@ -136,6 +136,22 @@ extern "C"
         GDO_LEARN_ACTION_MAX,
     } gdo_learn_action_t;
 
+    typedef enum
+    {
+        GDO_CONTACT_UNKNOWN = 0,
+        GDO_CONTACT_DOOR_OPEN,
+        GDO_CONTACT_DOOR_CLOSE,
+        GDO_CONTACT_MAX,
+    } gdo_contact_type_t;
+
+    typedef struct
+    {
+        gdo_contact_type_t contact;
+        gpio_num_t pin;
+        TaskHandle_t notifyTask;
+        uint32_t lastState;
+    } gdo_contact_t;
+
     typedef struct
     {
         int64_t sleep_micros;

@@ -28,6 +28,7 @@
 static void obst_isr_handler(void *arg);
 static void gdo_main_task(void *arg);
 static void gdo_sync_task(void *arg);
+static void gdo_contact_task(void *arg);
 static void v1_status_timer_cb(void *arg);
 static void motion_detect_timer_cb(void *arg);
 static void door_position_sync_timer_cb(void *arg);
@@ -103,6 +104,7 @@ static gdo_config_t g_config;
 static uint32_t g_door_start_moving_ms;
 static TaskHandle_t gdo_main_task_handle;
 static TaskHandle_t gdo_sync_task_handle;
+static TaskHandle_t gdo_contact_task_handle[GDO_CONTACT_MAX - 1];
 static QueueHandle_t gdo_tx_queue;
 static QueueHandle_t gdo_event_queue;
 static esp_timer_handle_t motion_detect_timer;
@@ -210,6 +212,21 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
   }
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // dry contact protocol requres obstructon sensor input pin
+    ESP_LOGE(TAG, "Failed to initialize LIBGDO... dry contact protocol requires obstruction sensor GPIO pin");
+    return ESP_FAIL;
+  }
+  else if (g_config.dc_close_pin > 0 || g_config.dc_open_pin > 0)
+  {
+    // we need to install gpio isr service for later use
+    err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    {
+      return err;
+    }
+  }
 
   if (g_status.tof_timer_active)
   {
@@ -225,42 +242,45 @@ esp_err_t gdo_init(const gdo_config_t *config)
     }
   }
 
-  // Begin in secplus protocol v1 as its the easiest to detect.
-  uart_config_t uart_config = {
-      .baud_rate = 1200,
-      .data_bits = UART_DATA_8_BITS,
-      .parity = UART_PARITY_EVEN,
-      .stop_bits = UART_STOP_BITS_1,
-      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+  if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // dry contact does not require serial comms
+    // Begin in secplus protocol v1 as its the easiest to detect.
+    uart_config_t uart_config = {
+        .baud_rate = 1200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_EVEN,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-      uart_config.source_clk = UART_SCLK_DEFAULT,
+        uart_config.source_clk = UART_SCLK_DEFAULT,
 #endif
-  };
+    };
 
-  err = uart_param_config(g_config.uart_num, &uart_config);
-  if (err != ESP_OK)
-  {
-    return err;
-  }
+    err = uart_param_config(g_config.uart_num, &uart_config);
+    if (err != ESP_OK)
+    {
+      return err;
+    }
 
-  if (g_config.invert_uart)
-  {
-    err = uart_set_line_inverse(g_config.uart_num,
-                                UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+    if (g_config.invert_uart)
+    {
+      err = uart_set_line_inverse(g_config.uart_num,
+                                  UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
+      if (err != ESP_OK)
+      {
+        return err;
+      }
+    }
+
+    err = uart_set_pin(g_config.uart_num, g_config.uart_tx_pin,
+                       g_config.uart_rx_pin, UART_PIN_NO_CHANGE,
+                       UART_PIN_NO_CHANGE);
     if (err != ESP_OK)
     {
       return err;
     }
   }
-
-  err = uart_set_pin(g_config.uart_num, g_config.uart_tx_pin,
-                     g_config.uart_rx_pin, UART_PIN_NO_CHANGE,
-                     UART_PIN_NO_CHANGE);
-  if (err != ESP_OK)
-  {
-    return err;
-  }
-
   gdo_tx_queue = xQueueCreate(16, sizeof(gdo_tx_message_t));
   if (!gdo_tx_queue)
   {
@@ -294,6 +314,15 @@ esp_err_t gdo_deinit(void)
   {
     vTaskDelete(gdo_sync_task_handle);
     gdo_sync_task_handle = NULL;
+  }
+
+  for (int i = 0; i < GDO_CONTACT_MAX - 1; i++)
+  {
+    if (gdo_contact_task_handle[i])
+    {
+      vTaskDelete(gdo_contact_task_handle[i]);
+      gdo_contact_task_handle[i] = NULL;
+    }
   }
 
   if (gdo_tx_queue)
@@ -384,20 +413,61 @@ done:
  */
 esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
 {
+  esp_err_t err = ESP_OK;
   if (!gdo_tx_queue)
   { // using this as a proxy for the driver being initialized
     return ESP_ERR_INVALID_STATE;
   }
   g_user_cb_arg = user_arg;
 
-  esp_err_t err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
-                                      &gdo_event_queue, 0);
-  if (err != ESP_OK)
+  if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
   {
-    return err;
+    // dry contact does not require serial comms
+    err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
+                              &gdo_event_queue, 0);
+    if (err != ESP_OK)
+    {
+      return err;
+    }
+
+    uart_flush(g_config.uart_num);
   }
 
-  uart_flush(g_config.uart_num);
+  if (g_config.dc_open_pin > 0)
+  {
+    // Test for > 0 even though zero is valid GPIO pin, but for GDO use case, we require pin to be > 0
+    gdo_contact_t *info = (gdo_contact_t *)calloc(1, sizeof(gdo_contact_t));
+    info->contact = GDO_CONTACT_DOOR_OPEN;
+    info->pin = g_config.dc_open_pin;
+    info->lastState = UINT_MAX;
+    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+#ifdef CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(gdo_contact_task, "gdo_open_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1]) != pdPASS)
+#else
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_open_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1], 1) != pdPASS)
+#endif
+    {
+      return ESP_ERR_NO_MEM;
+    }
+  }
+
+  if (g_config.dc_close_pin > 0)
+  {
+    // Test for > 0 even though zero is valid GPIO pin, but for GDO use case, we require pin to be > 0
+    gdo_contact_t *info = (gdo_contact_t *)calloc(1, sizeof(gdo_contact_t));
+    info->contact = GDO_CONTACT_DOOR_CLOSE;
+    info->pin = g_config.dc_close_pin;
+    info->lastState = UINT_MAX;
+    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+#ifdef CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(gdo_contact_task, "gdo_close_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1]) != pdPASS)
+#else
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_close_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1], 1) != pdPASS)
+#endif
+    {
+      return ESP_ERR_NO_MEM;
+    }
+  }
 
   // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
@@ -447,6 +517,12 @@ esp_err_t gdo_get_status(gdo_status_t *status)
  */
 esp_err_t gdo_sync(void)
 {
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // dry contact cannot do a sync, door status remains unknown until some activity
+    return ESP_OK;
+  }
+
   if (!gdo_main_task_handle ||
       g_status.synced)
   { // using this as a proxy for the driver being started
@@ -1424,7 +1500,7 @@ static esp_err_t gdo_v1_toggle_cmd(gdo_v1_command_t cmd)
         .cmd = (uint32_t)cmd + 1, // release is always 1 higher than press
         .door_cmd = false,
     };
-    return schedule_command(&args, g_tx_delay_ms * 1000);
+    return schedule_command(&args, g_tx_delay_ms * 500);
   }
 
   return err;
@@ -1555,6 +1631,22 @@ static esp_err_t transmit_packet(uint8_t *packet)
 
     // flush the rx buffer since it will now have the data we just sent.
     err = uart_flush_input(g_config.uart_num);
+  }
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    if (*packet == V1_CMD_TOGGLE_DOOR_PRESS)
+    {
+      // TODO remove log msg
+      ESP_LOGI(TAG, "Set dry contact TX pin on");
+      gpio_set_level(g_config.uart_tx_pin, 1);
+    }
+    else if (*packet == V1_CMD_TOGGLE_DOOR_RELEASE)
+    {
+      // TODO remove log msg
+      ESP_LOGI(TAG, "Set dry contact TX pin off");
+      gpio_set_level(g_config.uart_tx_pin, 0);
+    }
+    // else ignore, dry contact can't do anything else.
   }
   else
   { // secplus v1, just send the byte
@@ -2207,7 +2299,12 @@ inline static esp_err_t get_openings()
 inline static esp_err_t send_door_action(gdo_door_action_t action)
 {
   esp_err_t err = ESP_OK;
-  if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
+  if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  {
+    // handle as v1 toggle... we will do dry contact specific later
+    return gdo_v1_toggle_cmd(V1_CMD_TOGGLE_DOOR_PRESS);
+  }
+  else if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
   {
     return gdo_v1_toggle_cmd(V1_CMD_TOGGLE_DOOR_PRESS);
   }
@@ -2584,4 +2681,67 @@ esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold)
 inline static void tof_timer_cb(void *arg)
 {
   queue_event((gdo_event_t){GDO_EVENT_TOF_TIMER});
+}
+
+/**
+ * @brief Handles the dry contact interrupts
+ */
+static void IRAM_ATTR gdo_contact_isr_handler(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+  BaseType_t xHigherPriorityTaskWoken;
+
+  // Test the pin state, if it has changed from prior state then notify waiting task
+  uint32_t level = gpio_get_level(info->pin);
+  if (level != info->lastState)
+  {
+    info->lastState = level;
+    xTaskNotifyFromISR(info->notifyTask, level, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+    // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE.
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  }
+}
+
+/**
+ * @brief This task stated to handle change in state of dry contact sensors
+ * @details This task will...
+ */
+static void gdo_contact_task(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+  esp_err_t err = ESP_OK;
+
+  ESP_LOGI(TAG, "Initialize dry contact ISR and Task for pin: %d", info->pin);
+
+  info->notifyTask = xTaskGetCurrentTaskHandle();
+
+  // Install ISR handler for dry contact open pin
+  gpio_config_t io_conf = {
+      .pin_bit_mask = (1ULL << info->pin),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_ANYEDGE,
+  };
+
+  err = gpio_config(&io_conf);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to configure GPIO for pin %d, terminating task", info->pin);
+    return;
+  }
+
+  err = gpio_isr_handler_add(info->pin, gdo_contact_isr_handler, (void *)info);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to install ISR handler for pin %d, terminating task", info->pin);
+    return;
+  }
+
+  for (;;)
+  {
+    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+    ESP_LOGI(TAG, "Wake up for %d", info->pin);
+    // TODO debounce and add logic on what to do.
+  }
 }
