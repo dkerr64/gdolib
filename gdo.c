@@ -439,7 +439,6 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
     gdo_contact_t *info = (gdo_contact_t *)calloc(1, sizeof(gdo_contact_t));
     info->contact = GDO_CONTACT_DOOR_OPEN;
     info->pin = g_config.dc_open_pin;
-    info->lastState = UINT_MAX;
     // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
     if (xTaskCreate(gdo_contact_task, "gdo_open_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1]) != pdPASS)
@@ -457,7 +456,6 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
     gdo_contact_t *info = (gdo_contact_t *)calloc(1, sizeof(gdo_contact_t));
     info->contact = GDO_CONTACT_DOOR_CLOSE;
     info->pin = g_config.dc_close_pin;
-    info->lastState = UINT_MAX;
     // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
     if (xTaskCreate(gdo_contact_task, "gdo_close_ISR", 4096, info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1]) != pdPASS)
@@ -2691,14 +2689,29 @@ static void IRAM_ATTR gdo_contact_isr_handler(void *arg)
   gdo_contact_t *info = (gdo_contact_t *)arg;
   BaseType_t xHigherPriorityTaskWoken;
 
-  // Test the pin state, if it has changed from prior state then notify waiting task
-  uint32_t level = gpio_get_level(info->pin);
-  if (level != info->lastState)
+  xTaskNotifyFromISR(info->notifyTask, gpio_get_level(info->pin), eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+  // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE.
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+/**
+ * @brief If we received a interrupt from the GPIO pin, wait 50ms for debounce
+ * mitigation and check that the pin level is stable before declaring it good
+ */
+static void contact_debounce_timer_cb(void *arg)
+{
+  gdo_contact_t *info = (gdo_contact_t *)arg;
+  uint32_t pinLevel = gpio_get_level(info->pin);
+  if (pinLevel == info->level)
   {
-    info->lastState = level;
-    xTaskNotifyFromISR(info->notifyTask, level, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
-    // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE.
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    gpio_intr_enable(info->pin);
+    ESP_LOGI(TAG, "Level of pin %d is %d", info->pin, pinLevel);
+    // TODO... now what
+  }
+  else
+  {
+    info->level = pinLevel;
+    esp_timer_start_once(info->debounceTimer, 50 * 1000);
   }
 }
 
@@ -2714,12 +2727,28 @@ static void gdo_contact_task(void *arg)
   ESP_LOGI(TAG, "Initialize dry contact ISR and Task for pin: %d", info->pin);
 
   info->notifyTask = xTaskGetCurrentTaskHandle();
+  info->level = UINT_MAX;
+  // info->mux = malloc(sizeof(portMUX_TYPE));
+  // portMUX_INITIALIZE(info->mux);
+
+  esp_timer_create_args_t timer_args = {
+      .callback = contact_debounce_timer_cb,
+      .arg = info,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "contact_debounce_timer"};
+
+  err = esp_timer_create(&timer_args, &info->debounceTimer);
+  if (err != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to create contact debounce timer for pin %d, terminating task", info->pin);
+    return;
+  }
 
   // Install ISR handler for dry contact open pin
   gpio_config_t io_conf = {
       .pin_bit_mask = (1ULL << info->pin),
       .mode = GPIO_MODE_INPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
       .pull_down_en = GPIO_PULLDOWN_DISABLE,
       .intr_type = GPIO_INTR_ANYEDGE,
   };
@@ -2740,8 +2769,20 @@ static void gdo_contact_task(void *arg)
 
   for (;;)
   {
-    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
-    ESP_LOGI(TAG, "Wake up for %d", info->pin);
-    // TODO debounce and add logic on what to do.
+    uint32_t pinLevel;
+    xTaskNotifyWait(0, 0, &pinLevel, portMAX_DELAY);
+    ESP_LOGI(TAG, "Wake up for %d, level is %d", info->pin, pinLevel);
+    // Thinking on how to debounce...
+    // We could disable interupts on this pin
+    // Start a timer for 50ms, at end of that time test pin level
+    // if pin level is the same, we've debounced, enable interrupts, send message with value.
+    // if pin level is different, remember new level, start timer again.
+    if (info->level != pinLevel)
+    {
+      gpio_intr_disable(info->pin); // re-enabled in timer callback
+      info->level = pinLevel;
+      esp_timer_stop(info->debounceTimer);
+      esp_timer_start_once(info->debounceTimer, 50 * 1000);
+    }
   }
 }

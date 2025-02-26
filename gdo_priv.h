@@ -148,8 +148,10 @@ extern "C"
     {
         gdo_contact_type_t contact;
         gpio_num_t pin;
-        TaskHandle_t notifyTask;
-        uint32_t lastState;
+        TaskHandle_t notifyTask;          // Handle of task that ISR should notify when fired
+        esp_timer_handle_t debounceTimer; // Handle of timer used for debounce logic
+        portMUX_TYPE *mux;                // Mutex to wrap critical sections in ISR and task
+        volatile uint32_t level;          // Last known state of the GPIO pin
     } gdo_contact_t;
 
     typedef struct
