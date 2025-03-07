@@ -34,6 +34,7 @@ static void door_position_sync_timer_cb(void *arg);
 static void scheduled_cmd_timer_cb(void *arg);
 static void scheduled_event_timer_cb(void *arg);
 static void obst_timer_cb(void *arg);
+static void obst_test_pulse_timer_cb(void *arg);
 static void tof_timer_cb(void *arg);
 static void get_paired_devices(gdo_paired_device_type_t type);
 static void update_light_state(gdo_light_state_t light_state);
@@ -95,6 +96,8 @@ static gdo_status_t g_status = {
     .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
     .tof_timer_active = false,
     .tof_timer_usecs = 250000,
+    .obst_test_pulse_timer_active = false,
+    .obst_test_pulse_timer_usecs = 50000,
     .vehicle_parked_threshold = 100,
 };
 
@@ -109,6 +112,7 @@ static esp_timer_handle_t motion_detect_timer;
 static esp_timer_handle_t door_position_sync_timer;
 static esp_timer_handle_t obst_timer;
 static esp_timer_handle_t tof_timer;
+static esp_timer_handle_t obst_test_pulse_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
@@ -130,7 +134,8 @@ esp_err_t gdo_init(const gdo_config_t *config)
   if (!config || config->uart_num >= UART_NUM_MAX ||
       config->uart_tx_pin >= GPIO_NUM_MAX ||
       config->uart_rx_pin >= GPIO_NUM_MAX ||
-      config->obst_in_pin >= GPIO_NUM_MAX)
+      config->obst_in_pin >= GPIO_NUM_MAX ||
+      config->obst_tp_pin >= GPIO_NUM_MAX)
   {
     return ESP_ERR_INVALID_ARG;
   }
@@ -162,7 +167,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
     return err;
   }
 
-  if ((g_config.obst_in_pin >= 0) && !g_config.obst_from_status)
+  if ((g_config.obst_in_pin > 0) && !g_config.obst_from_status)
   {
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
@@ -202,7 +207,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
     timer_args.name = "obst_timer";
     err = esp_timer_create(&timer_args, &obst_timer);
 
-    // Check the obstruction pulse counts every 50ms
+    // Check the obstruction pulse counts every 100ms
     err = esp_timer_start_periodic(obst_timer, 100000);
 
     if (err != ESP_OK)
@@ -219,6 +224,33 @@ esp_err_t gdo_init(const gdo_config_t *config)
     timer_args.name = "tof_timer";
     err = esp_timer_create(&timer_args, &tof_timer);
     err = esp_timer_start_periodic(tof_timer, g_status.tof_timer_usecs);
+    if (err != ESP_OK)
+    {
+      return err;
+    }
+  }
+
+  if (g_config.obst_tp_pin > 0)
+  {
+    gpio_config_t io_conf = {};
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << g_config.obst_tp_pin);
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    esp_err_t err = gpio_config(&io_conf); // Configure the GPIO pin
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+  }
+
+  if (g_status.obst_test_pulse_timer_active)
+  {
+    timer_args.callback = obst_test_pulse_timer_cb;
+    timer_args.arg = (void *)&g_status;
+    timer_args.dispatch_method = ESP_TIMER_TASK;
+    timer_args.name = "obst_test_pulse_timer";
+    err = esp_timer_create(&timer_args, &obst_test_pulse_timer);
+    err = esp_timer_start_periodic(obst_test_pulse_timer, g_status.obst_test_pulse_timer_usecs);
     if (err != ESP_OK)
     {
       return err;
@@ -330,6 +362,12 @@ esp_err_t gdo_deinit(void)
   {
     esp_timer_delete(tof_timer);
     tof_timer = NULL;
+  }
+
+  if (obst_test_pulse_timer)
+  {
+    esp_timer_delete(obst_test_pulse_timer);
+    obst_test_pulse_timer = NULL;
   }
 
   g_protocol_forced = false;
@@ -1215,6 +1253,19 @@ static void obst_timer_cb(void *arg)
     queue_event((gdo_event_t){GDO_EVENT_OBST});
   }
   stats->count = 0;
+}
+
+/**
+ * @brief obst test pulse timer callback.
+ * @details Optional, tiggers on a 50ms interval timer on the preconfigured output pin.
+ * The callback is tasked with generating a 50ms square wave pulse on the obst test pin.
+ * The pulse is used to test the obstruction sensor
+ */
+inline static void obst_test_pulse_timer_cb(void *arg)
+{
+    static bool last_set_value = false;
+    last_set_value = !last_set_value;
+    gpio_set_level(g_config.obst_tp_pin, last_set_value);
 }
 
 /**
@@ -2461,7 +2512,7 @@ esp_err_t gdo_set_time_to_close(uint16_t time_to_close)
 }
 
 /**
- * @brief Set the user interval timer 1 value and enable/disable flag
+ * @brief Set the tof interval timer value and enable/disable flag
  * @param interval the interval time in micro seconds
  * @param enabled the flag to enable or disable the timer on gdo_start
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
@@ -2476,6 +2527,25 @@ esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled)
   }
   g_status.tof_timer_active = enabled;
   g_status.tof_timer_usecs = interval;
+  return err;
+}
+
+/**
+ * @brief Set the obst test pulse interval timer value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+ */
+esp_err_t gdo_set_obst_test_pulse_timer(uint32_t interval, bool enabled)
+{
+  esp_err_t err = ESP_OK;
+  if (interval < 1000) // prevent a race condition
+  {
+    ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
+    err = ESP_ERR_INVALID_ARG;
+  }
+  g_status.obst_test_pulse_timer_active = enabled;
+  g_status.obst_test_pulse_timer_usecs = interval;
   return err;
 }
 
@@ -2585,3 +2655,4 @@ inline static void tof_timer_cb(void *arg)
 {
   queue_event((gdo_event_t){GDO_EVENT_TOF_TIMER});
 }
+

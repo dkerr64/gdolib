@@ -104,6 +104,7 @@ void app_main(void)
         .uart_tx_pin = 1,
         .uart_rx_pin = 2,
         .obst_in_pin = 5,
+        .obst_tp_pin = 0,
     };
 
     gdo_init(&gdo_conf);
