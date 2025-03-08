@@ -212,7 +212,11 @@ const char *v1_cmd_to_string(gdo_v1_command_t cmd)
 
 void print_buffer(gdo_protocol_type_t protocol, uint8_t *buf, bool is_tx)
 {
-    if (protocol == GDO_PROTOCOL_SEC_PLUS_V2)
+    if (protocol == GDO_PROTOCOL_DRY_CONTACT)
+    {
+        ESP_LOGD(TAG, "Dry Contact set pin %2d to %1d", buf[0], buf[1]);
+    }
+    else if (protocol == GDO_PROTOCOL_SEC_PLUS_V2)
     {
         ESP_LOGD(TAG, "%s: "
                       "[%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X]",

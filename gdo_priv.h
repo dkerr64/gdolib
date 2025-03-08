@@ -30,6 +30,7 @@ extern "C"
 
 #define RX_BUFFER_SIZE 160
 #define GDO_PACKET_SIZE ((g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) ? 19UL : 2UL)
+#define GDO_DRY_CONTACT_DEBOUNCE_MS 50
 
     static const char *TAG = "gdolib";
 
@@ -135,6 +136,28 @@ extern "C"
         GDO_LEARN_ACTION_ACTIVATE,
         GDO_LEARN_ACTION_MAX,
     } gdo_learn_action_t;
+
+    typedef enum
+    {
+        GDO_CONTACT_UNKNOWN = 0,
+        GDO_CONTACT_DOOR_OPEN,
+        GDO_CONTACT_DOOR_CLOSE,
+        GDO_CONTACT_MAX,
+    } gdo_contact_type_t;
+
+    typedef struct
+    {
+        gdo_contact_type_t contact;
+        gpio_num_t pin;
+        TaskHandle_t notifyTask;          // Handle of task that ISR should notify when fired
+        esp_timer_handle_t debounceTimer; // Handle of timer used for debounce logic
+        portMUX_TYPE mux;                 // Mutex to wrap critical sections in ISR and task
+        volatile bool inDebounce;         // Set when we are in midst of debounce check
+        volatile uint32_t level;          // Last known state of the GPIO pin
+        uint64_t levelTimestamp;          // microseconds when level set (initial interrupt)
+        uint32_t count;                   // Incremented when interrupt received during a debounce period
+        uint64_t countTimestamp;          // microseconds when count last incremented (bounces)
+    } gdo_contact_t;
 
     typedef struct
     {

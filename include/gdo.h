@@ -111,6 +111,7 @@ extern "C"
         GDO_PROTOCOL_SEC_PLUS_V1 = 1,
         GDO_PROTOCOL_SEC_PLUS_V2,
         GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL,
+        GDO_PROTOCOL_DRY_CONTACT,
         GDO_PROTOCOL_MAX,
     } gdo_protocol_type_t;
 
@@ -161,9 +162,10 @@ extern "C"
         gdo_paired_device_t paired_devices;   // Paired devices
         gdo_door_state_t last_move_direction; // Last move direction
         bool synced;                          // Synced state
-        bool ttc_enabled;                     //ttc active
+        bool ttc_enabled;                     // ttc active
         bool toggle_only;                     // Used when the door opener only supports the toggle command.
         bool tof_timer_active;                // ToF interval timer active
+        bool obst_test_pulse_timer_active;        // Obstruction test pulse output pin timer active
         uint16_t openings;                    // Number of openings
         uint16_t ttc_seconds;                 // Time to close in seconds
         uint16_t open_ms;                     // Time door takes to open from fully closed in milliseconds
@@ -174,18 +176,25 @@ extern "C"
         uint32_t client_id;                   // Client ID
         uint32_t rolling_code;                // Rolling code
         uint32_t tof_timer_usecs;             // ToF interval timer microseconds use to triger TOF events
+        uint32_t obst_test_pulse_timer_usecs; // Obstruction test pulse output pin timer microseconds
     } gdo_status_t;
 
     typedef struct
     {
-        uart_port_t uart_num;   // UART port number
-        bool obst_from_status;  // Use obstruction status from status message
-        bool invert_uart;       // Invert UART signal
-        gpio_num_t uart_tx_pin; // UART TX pin
-        gpio_num_t uart_rx_pin; // UART RX pin
-        gpio_num_t obst_in_pin; // Obstruction input pin
-        gpio_num_t rf_tx_pin;   // RF TX pin
-        gpio_num_t rf_rx_pin;   // RF RX pin
+        uart_port_t uart_num;             // UART port number
+        bool obst_from_status;            // Use obstruction status from status message
+        bool invert_uart;                 // Invert UART signal
+        gpio_num_t uart_tx_pin;           // UART TX pin
+        gpio_num_t uart_rx_pin;           // UART RX pin
+        gpio_num_t obst_in_pin;           // Obstruction input pin
+        gpio_num_t obst_tp_pin;           // Obstruction test pulse pin
+        gpio_num_t rf_tx_pin;             // RF TX pin
+        gpio_num_t rf_rx_pin;             // RF RX pin
+        gpio_num_t dc_open_pin;           // dry contact open sensor input pin
+        gpio_num_t dc_close_pin;          // dry contact close sensor input pin
+        gpio_num_t dc_discrete_open_pin;  // dry contact open door output pin
+        gpio_num_t dc_discrete_close_pin; // dry contact close door output pin
+        uint32_t dc_debounce_ms;          // dry contact debounce timer duration in milliseconds.
     } gdo_config_t;
 
 #define GDO_PAIRED_DEVICE_COUNT_UNKNOWN 0xff
@@ -461,13 +470,22 @@ extern "C"
      * @param interval the interval time in micro seconds
      * @param enabled the flag to enable or disable the timer on gdo_start
      * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
-    */
+     */
     esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled);
+
+    /**
+     * @brief Set the obst test pulse interval timer value and enable/disable flag
+     * @param interval the interval time in micro seconds
+     * @param enabled the flag to enable or disable the timer on gdo_start
+     * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+     * @note Init config->obst_tp_pin with the desired GPIO pin 
+    */
+    esp_err_t gdo_set_obst_test_pulse_timer(uint32_t interval, bool enabled);
 
     /**
      * @brief Sets the vehicle parked threshold in cm
      * @param vehicle_parked_threshold distance measure that triggers a parked state
-    */
+     */
     esp_err_t gdo_set_vehicle_parked_threshold(uint16_t vehicle_parked_threshold);
 
 #ifdef __cplusplus
