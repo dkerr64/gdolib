@@ -592,6 +592,7 @@ esp_err_t gdo_sync(void)
   if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
   {
     // dry contact cannot do a sync, door status remains unknown until some activity
+    g_status.synced = true;
     return ESP_OK;
   }
 
@@ -2124,6 +2125,7 @@ static void gdo_main_task(void *arg)
           // If not synced yet just delete the message as the sync loop will resend it
           if (!g_status.synced)
           {
+            ESP_LOGD(TAG, "Collision detected, ignoring as in middle of sync");
             xQueueReceive(gdo_tx_queue, &tx_message, 0);
             free(tx_message.packet);
             break;
