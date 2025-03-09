@@ -1837,8 +1837,8 @@ static void decode_v1_packet(uint8_t *packet)
   gdo_v1_command_t cmd = (gdo_v1_command_t)packet[0];
   uint8_t resp = packet[1];
 
-  // If not synced then check that we are not receiving echo back of our sequence of sync status commands
-  if (cmd == V1_CMD_QUERY_DOOR_STATUS && (!g_status.synced && resp != V1_CMD_QUERY_OTHER_STATUS))
+  // check that we are not receiving echo back of our sequence of sync status commands / wall plate emulation
+  if ((cmd == V1_CMD_QUERY_DOOR_STATUS && g_status.synced) || ((cmd == V1_CMD_QUERY_DOOR_STATUS && !g_status.synced) && resp != V1_CMD_QUERY_OTHER_STATUS))
   {
     gdo_door_state_t door_state = GDO_DOOR_STATE_UNKNOWN;
     uint8_t val = resp & 0x7;
@@ -1869,12 +1869,12 @@ static void decode_v1_packet(uint8_t *packet)
   {
     queue_v1_command(V1_CMD_QUERY_OTHER_STATUS);
   }
-  else if (cmd == V1_CMD_QUERY_OTHER_STATUS && (!g_status.synced && resp != V1_CMD_QUERY_DOOR_STATUS && resp != V1_CMD_QUERY_OTHER_STATUS && resp != V1_CMD_OBSTRUCTION))
+  else if ((cmd == V1_CMD_QUERY_OTHER_STATUS && g_status.synced) || ((cmd == V1_CMD_QUERY_OTHER_STATUS && !g_status.synced) && resp != V1_CMD_QUERY_DOOR_STATUS && resp != V1_CMD_QUERY_OTHER_STATUS && resp != V1_CMD_OBSTRUCTION))
   {
     update_light_state((gdo_light_state_t)((resp >> 2) & 1));
     update_lock_state((gdo_lock_state_t)((~resp >> 3) & 1));
   }
-  else if (cmd == V1_CMD_OBSTRUCTION && (!g_status.synced && resp != V1_CMD_QUERY_DOOR_STATUS))
+  else if ((cmd == V1_CMD_OBSTRUCTION && g_status.synced) || ((cmd == V1_CMD_OBSTRUCTION && !g_status.synced) && resp != V1_CMD_QUERY_DOOR_STATUS))
   {
     update_obstruction_state(resp == 0 ? GDO_OBSTRUCTION_STATE_CLEAR : GDO_OBSTRUCTION_STATE_OBSTRUCTED);
   }
@@ -1888,7 +1888,7 @@ static void decode_v1_packet(uint8_t *packet)
   }
   else
   {
-    ESP_LOGD(TAG, "Unhandled command: %02x, resp: %02x", cmd, resp);
+    ESP_LOGD(TAG, "Unhandled command: %02x, resp: %02x, synced: %d", cmd, resp, g_status.synced);
   }
 }
 
