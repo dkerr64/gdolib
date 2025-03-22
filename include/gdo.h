@@ -198,6 +198,7 @@ extern "C"
         gpio_num_t dc_discrete_open_pin;  // dry contact open door output pin
         gpio_num_t dc_discrete_close_pin; // dry contact close door output pin
         uint32_t dc_debounce_ms;          // dry contact debounce timer duration in milliseconds.
+        bool use_sw_serial;               // use software serial instead of h/w UART
     } gdo_config_t;
 
 #define GDO_PAIRED_DEVICE_COUNT_UNKNOWN 0xff
