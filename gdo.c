@@ -24,9 +24,7 @@
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
 
-#ifdef USE_GDOLIB_SWSERIAL
 #include "gdoSoftwareSerial.h"
-#endif
 
 /***************************** LOCAL FUNCTION DECLARATIONS ****************************/
 static void obst_isr_handler(void *arg);
@@ -124,10 +122,8 @@ static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
-#ifdef USE_GDOLIB_SWSERIAL
 static MessageBufferHandle_t serial_tx_buffer;
 static TaskHandle_t serial_task_handle;
-#endif
 
 /******************************* PUBLIC API FUNCTIONS **********************************/
 
@@ -309,8 +305,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
   }
-#ifndef USE_GDOLIB_SWSERIAL
-  else
+  else if (!g_config.use_sw_serial)
   {
     // dry contact does not require serial comms
     // Begin in secplus protocol v1 as its the easiest to detect.
@@ -349,7 +344,10 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
   }
-#endif
+  else
+  {
+    ESP_LOGI(TAG, "Using software emulation of serial port instead of h/w UART");
+  }
 
   gdo_tx_queue = xQueueCreate(16, sizeof(gdo_tx_message_t));
   if (!gdo_tx_queue)
@@ -473,11 +471,14 @@ esp_err_t gdo_deinit(void)
     goto done;
   }
 
-#ifdef USE_GDOLIB_SWSERIAL
-  err = serial_stop();
-#else
-  err = uart_driver_delete(g_config.uart_num);
-#endif
+  if (g_config.use_sw_serial)
+  {
+    err = serial_stop();
+  }
+  else
+  {
+    err = uart_driver_delete(g_config.uart_num);
+  }
 
 done:
   return err;
@@ -503,28 +504,30 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
   if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
   {
     // dry contact does not require serial comms
-#ifdef USE_GDOLIB_SWSERIAL
-    gdo_event_queue = xQueueCreate(16, sizeof(gdo_event_t));
-    if (!gdo_event_queue)
+    if (g_config.use_sw_serial)
     {
-      return ESP_ERR_NO_MEM;
+      gdo_event_queue = xQueueCreate(16, sizeof(gdo_event_t));
+      if (!gdo_event_queue)
+      {
+        return ESP_ERR_NO_MEM;
+      }
+      esp_err_t err = serial_start(gdo_event_queue, &serial_tx_buffer, &serial_task_handle, g_config.uart_rx_pin, g_config.uart_tx_pin);
+      if (err != ESP_OK)
+      {
+        return err;
+      }
+      serial_set_protocol(g_status.protocol);
     }
-    esp_err_t err = serial_start(gdo_event_queue, &serial_tx_buffer, &serial_task_handle, g_config.uart_rx_pin, g_config.uart_tx_pin);
-    if (err != ESP_OK)
+    else
     {
-      return err;
+      err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
+                                &gdo_event_queue, 0);
+      if (err != ESP_OK)
+      {
+        return err;
+      }
+      uart_flush(g_config.uart_num);
     }
-    serial_set_protocol(g_status.protocol);
-#else
-    err = uart_driver_install(g_config.uart_num, RX_BUFFER_SIZE, 0, 32,
-                              &gdo_event_queue, 0);
-    if (err != ESP_OK)
-    {
-      return err;
-    }
-
-    uart_flush(g_config.uart_num);
-#endif
   }
   else
   {
@@ -1167,13 +1170,16 @@ static void gdo_sync_task(void *arg)
 
   if (g_status.protocol != GDO_PROTOCOL_SEC_PLUS_V2)
   {
-#ifdef USE_GDOLIB_SWSERIAL
-    serial_set_protocol(GDO_PROTOCOL_SEC_PLUS_V1);
-#else
-    uart_set_baudrate(g_config.uart_num, 1200);
-    uart_set_parity(g_config.uart_num, UART_PARITY_EVEN);
-    uart_flush(g_config.uart_num);
-#endif
+    if (g_config.use_sw_serial)
+    {
+      serial_set_protocol(GDO_PROTOCOL_SEC_PLUS_V1);
+    }
+    else
+    {
+      uart_set_baudrate(g_config.uart_num, 1200);
+      uart_set_parity(g_config.uart_num, UART_PARITY_EVEN);
+      uart_flush(g_config.uart_num);
+    }
     xQueueReset(gdo_event_queue);
 
     // Delay forever if there is a smart panel connected to allow it to come online and sync before we do anything.
@@ -1196,9 +1202,10 @@ static void gdo_sync_task(void *arg)
       }
       else
       {
-#ifndef USE_GDOLIB_SWSERIAL
-        uart_flush(g_config.uart_num);
-#endif
+        if (g_config.use_sw_serial)
+        {
+          uart_flush(g_config.uart_num);
+        }
         xQueueReset(gdo_event_queue);
         esp_timer_start_periodic(v1_status_timer, 250 * 1000);
       }
@@ -1227,13 +1234,16 @@ static void gdo_sync_task(void *arg)
   uint32_t timeout = esp_timer_get_time() / 1000 + 5000;
   uint8_t sync_stage = 0;
   g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V2;
-#ifdef USE_GDOLIB_SWSERIAL
-  serial_set_protocol(g_status.protocol);
-#else
-  uart_set_baudrate(g_config.uart_num, 9600);
-  uart_set_parity(g_config.uart_num, UART_PARITY_DISABLE);
-  uart_flush(g_config.uart_num);
-#endif
+  if (g_config.use_sw_serial)
+  {
+    serial_set_protocol(g_status.protocol);
+  }
+  else
+  {
+    uart_set_baudrate(g_config.uart_num, 9600);
+    uart_set_parity(g_config.uart_num, UART_PARITY_DISABLE);
+    uart_flush(g_config.uart_num);
+  }
   xQueueReset(gdo_event_queue);
 
   // We send a get openings because if we have a new client ID then the
@@ -1724,8 +1734,7 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
  * @param packet The packet to send to the GDO.
  * @return ESP_OK on success, other non-zero errors from the UART or s/w serial driver.
  */
-#ifdef USE_GDOLIB_SWSERIAL
-static esp_err_t transmit_packet(uint8_t *packet)
+static esp_err_t transmit_packet_sw(uint8_t *packet)
 {
   if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
   {
@@ -1755,8 +1764,8 @@ static esp_err_t transmit_packet(uint8_t *packet)
     return (esp_err_t)rc;
   }
 }
-#else
-static esp_err_t transmit_packet(uint8_t *packet)
+
+static esp_err_t transmit_packet_hw(uint8_t *packet)
 {
   esp_err_t err = ESP_OK;
 
@@ -1826,7 +1835,18 @@ static esp_err_t transmit_packet(uint8_t *packet)
 
   return err;
 }
-#endif
+
+static esp_err_t transmit_packet(uint8_t *packet)
+{
+  if (g_config.use_sw_serial)
+  {
+    return transmit_packet_sw(packet);
+  }
+  else
+  {
+    return transmit_packet_hw(packet);
+  }
+}
 
 /**
  * @brief Decodes a packet received from the GDO and updates the status.
@@ -1995,11 +2015,9 @@ static void decode_packet(uint8_t *packet)
  */
 static void gdo_main_task(void *arg)
 {
-#ifndef USE_GDOLIB_SWSERIAL
   uint8_t rx_buffer[RX_BUFFER_SIZE * 2]; // double the size to prevent overflow
   uint16_t rx_buf_index = 0;
   uint8_t rx_pending = 0;
-#endif
   gdo_tx_message_t tx_message = {};
   gdo_event_t event = {};
   gdo_cb_event_t cb_event = GDO_CB_EVENT_MAX;
@@ -2015,7 +2033,6 @@ static void gdo_main_task(void *arg)
 
       switch ((int)event.gdo_event)
       {
-#ifdef USE_GDOLIB_SWSERIAL
       case SERIAL_EVENT_DATA:
       {
         if (!g_status.protocol)
@@ -2047,7 +2064,6 @@ static void gdo_main_task(void *arg)
         }
         break;
       }
-#else
       case UART_BREAK:
         // All messages from the GDO start with a break if using V2 protocol.
         if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
@@ -2214,7 +2230,6 @@ static void gdo_main_task(void *arg)
         rx_buf_index = 0;
         xQueueReset(gdo_event_queue);
         break;
-#endif
       case GDO_EVENT_TX_PENDING:
       {
         uint32_t now = esp_timer_get_time() / 1000;
@@ -2229,11 +2244,7 @@ static void gdo_main_task(void *arg)
           break;
         }
 
-#ifdef USE_GDOLIB_SWSERIAL
-        if ((g_status.protocol != GDO_PROTOCOL_DRY_CONTACT) && gpio_get_level(g_config.uart_rx_pin))
-#else
-        if ((g_status.protocol != GDO_PROTOCOL_DRY_CONTACT) && (rx_pending || gpio_get_level(g_config.uart_rx_pin)))
-#endif
+        if (rx_pending || gpio_get_level(g_config.uart_rx_pin))
         {
           // If not synced yet just delete the message as the sync loop will resend it
           if (!g_status.synced)
