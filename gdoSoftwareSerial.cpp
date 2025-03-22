@@ -5,8 +5,7 @@
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  */
-#ifdef USE_GDOLIB_SWSERIAL
-// skip entire file if not compiling with s/w serial
+
 #include "gdo_priv.h"
 #include "SoftwareSerial.h"
 #include "gdoSoftwareSerial.h"
@@ -317,7 +316,18 @@ void serial_task(TaskParams *arg)
                 }
                 else
                 {
+                    bool poll_cmd = (*txPacket.packet == 0x38) || (*txPacket.packet == 0x39) || (*txPacket.packet == 0x3A);
+                    // if not a poll command (and polls only with wall panel emulation),
+                    // disable disable rx (allows for cleaner tx, and no echo)
+                    if (!poll_cmd)
+                    {
+                        swSerial.enableRx(false);
+                    }
                     swSerial.write(*txPacket.packet);
+                    if (!poll_cmd)
+                    {
+                        swSerial.enableRx(true);
+                    }
                 }
             }
             // Notify sending task that packet has been sent
@@ -341,4 +351,3 @@ void serial_task(TaskParams *arg)
         }
     }
 }
-#endif
