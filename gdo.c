@@ -24,6 +24,8 @@
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
 
+static const char *TAG = "gdolib";
+
 /***************************** LOCAL FUNCTION DECLARATIONS ****************************/
 static void obst_isr_handler(void *arg);
 static void gdo_main_task(void *arg);

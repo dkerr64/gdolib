@@ -32,8 +32,6 @@ extern "C"
 #define GDO_PACKET_SIZE ((g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) ? 19UL : 2UL)
 #define GDO_DRY_CONTACT_DEBOUNCE_MS 50
 
-    static const char *TAG = "gdolib";
-
     typedef enum
     {
         GDO_CMD_UNKNOWN = 0x000,

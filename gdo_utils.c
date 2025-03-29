@@ -19,6 +19,8 @@
 #include "gdo.h"
 #include "gdo_priv.h"
 
+static const char *TAG = "gdo_utils";
+
 const char *gdo_door_state_str[] = {
     "Unknown",
     "Open",
