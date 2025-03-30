@@ -116,6 +116,7 @@ static esp_timer_handle_t door_position_sync_timer;
 static esp_timer_handle_t obst_timer;
 static esp_timer_handle_t tof_timer;
 static esp_timer_handle_t obst_test_pulse_timer;
+static esp_timer_handle_t v1_status_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
@@ -362,6 +363,13 @@ esp_err_t gdo_deinit(void)
   if (!gdo_tx_queue)
   { // using this as a proxy for the driver being initialized
     return ESP_ERR_INVALID_STATE;
+  }
+
+  ESP_LOGI(TAG, "Shutdown GDOLIB tasks");
+  if (v1_status_timer)
+  {
+    esp_timer_delete(v1_status_timer);
+    v1_status_timer = NULL;
   }
 
   if (gdo_main_task_handle)
@@ -635,6 +643,7 @@ esp_err_t gdo_door_open(void)
   {
     if (g_status.ttc_enabled == true)
       gdo_set_time_to_close(g_ttc_delay_s);
+    ESP_LOGI(TAG, "Door already opening or open, ignore request to open door");
     return ESP_OK;
   }
 
@@ -649,10 +658,11 @@ esp_err_t gdo_door_open(void)
 esp_err_t gdo_door_close(void)
 {
   g_status.door_target = 10000;
-
+  ESP_LOGI(TAG, "Send door close");
   if (g_status.door == GDO_DOOR_STATE_CLOSING ||
       g_status.door == GDO_DOOR_STATE_CLOSED)
   {
+    ESP_LOGI(TAG, "Door already closed or closing, ignore request to close door");
     return ESP_OK;
   }
 
@@ -671,7 +681,7 @@ esp_err_t gdo_door_stop(void)
   {
     return send_door_action(GDO_DOOR_ACTION_STOP);
   }
-
+  ESP_LOGI(TAG, "Door is not opening or closing, ignore request to stop door");
   return ESP_OK;
 }
 
@@ -1155,7 +1165,6 @@ static void gdo_sync_task(void *arg)
                                             .dispatch_method = ESP_TIMER_TASK,
                                             .name = "v1_status_timer"};
 
-      esp_timer_handle_t v1_status_timer;
       if (esp_timer_create(&timer_args, &v1_status_timer) != ESP_OK)
       {
         ESP_LOGE(TAG, "Failed to create V1 status timer");
