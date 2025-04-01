@@ -274,15 +274,19 @@ extern "C"
 
     /**
      * @brief Turns the light on.
+     * @param check if true then query the door status after setting light on.
      * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if the encoding fails.
      */
-    esp_err_t gdo_light_on(void);
+    esp_err_t gdo_light_on();
+    esp_err_t gdo_light_on_check(bool check);
 
     /**
      * @brief Turns the light off.
+     * @param check if true then query the door status after setting light off.
      * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if the encoding fails.
      */
-    esp_err_t gdo_light_off(void);
+    esp_err_t gdo_light_off();
+    esp_err_t gdo_light_off_check(bool check);
 
     /**
      * @brief Toggles the light.

@@ -780,24 +780,26 @@ esp_err_t gdo_door_move_to_target(uint32_t target)
  * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if
  * the encoding fails.
  */
-esp_err_t gdo_light_on(void)
+esp_err_t gdo_light_on_check(bool check)
 {
   esp_err_t err = ESP_OK;
 
-  if (g_status.light == GDO_LIGHT_STATE_ON)
-  {
-    return err;
-  }
-
   if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
   {
-    return gdo_v1_toggle_cmd(V1_CMD_TOGGLE_LIGHT_PRESS);
+    // Sec+1.0 is a toggle, so we need to know current light state (if we care)
+    if (!check || g_status.light != GDO_LIGHT_STATE_ON)
+    {
+      err = gdo_v1_toggle_cmd(V1_CMD_TOGGLE_LIGHT_PRESS);
+      // No need to explicitly update status, wall panel (or emulation) is doing that constantly
+    }
   }
   else
   {
+    // Sec+2.0 has discrete on/off commands, no need to check current state
     err = queue_command(GDO_CMD_LIGHT, GDO_LIGHT_ACTION_ON, 0, 0);
-    if (err == ESP_OK)
+    if (check && err == ESP_OK)
     {
+      // retrieve door (light) status if requested. This is optional because it is slow
       get_status();
     }
   }
@@ -805,34 +807,50 @@ esp_err_t gdo_light_on(void)
   return err;
 }
 
+esp_err_t gdo_light_on()
+{
+  // Default light_on function will check for current state
+  // or retrieve door status after turning on.
+  return gdo_light_on_check(true);
+}
+
 /**
  * @brief Turns the light off.
  * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if
  * the encoding fails.
  */
-esp_err_t gdo_light_off(void)
+esp_err_t gdo_light_off_check(bool check)
 {
   esp_err_t err = ESP_OK;
 
-  if (g_status.light == GDO_LIGHT_STATE_OFF)
-  {
-    return err;
-  }
-
   if (g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1)
   {
-    return gdo_v1_toggle_cmd(V1_CMD_TOGGLE_LIGHT_PRESS);
+    // Sec+1.0 is a toggle, so we need to know current light state (if we care)
+    if (!check || g_status.light != GDO_LIGHT_STATE_OFF)
+    {
+      err = gdo_v1_toggle_cmd(V1_CMD_TOGGLE_LIGHT_PRESS);
+      // No need to explicitly update status, wall panel (or emulation) is doing that constantly
+    }
   }
   else
   {
+    // Sec+2.0 has discrete on/off commands, no need to check current state
     err = queue_command(GDO_CMD_LIGHT, GDO_LIGHT_ACTION_OFF, 0, 0);
-    if (err == ESP_OK)
+    if (check && err == ESP_OK)
     {
+      // retrieve door (light) status if requested. This is optional because it is slow
       get_status();
     }
   }
 
   return err;
+}
+
+esp_err_t gdo_light_off()
+{
+  // Default light_off function will check for current state
+  // or retrieve door status after turning off.
+  return gdo_light_off_check(true);
 }
 
 /**
