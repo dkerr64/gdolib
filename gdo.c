@@ -2201,7 +2201,17 @@ static void gdo_main_task(void *arg)
         else if (g_status.protocol != GDO_PROTOCOL_DRY_CONTACT)
         {
           // if dry contact then last_tx_time and send command is irrelevant
-          ESP_LOGD(TAG, "Sent command: %s", g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 ? cmd_to_string(tx_message.cmd) : v1_cmd_to_string(tx_message.cmd));
+          if ((g_status.protocol & GDO_PROTOCOL_SEC_PLUS_V1) && (tx_message.cmd == (gdo_command_t)V1_CMD_QUERY_DOOR_STATUS ||
+                                                                 tx_message.cmd == (gdo_command_t)V1_CMD_QUERY_OTHER_STATUS ||
+                                                                 tx_message.cmd == (gdo_command_t)V1_CMD_OBSTRUCTION))
+          {
+            // Log verbose if query or obstruction request, as they are sent as part of wall panel emulation and would fill up the log
+            ESP_LOGV(TAG, "Sent command: %s", v1_cmd_to_string(tx_message.cmd));
+          }
+          else
+          {
+            ESP_LOGD(TAG, "Sent command: %s", g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 ? cmd_to_string(tx_message.cmd) : v1_cmd_to_string(tx_message.cmd));
+          }
           last_tx_time = esp_timer_get_time() / 1000;
         }
 
@@ -2279,8 +2289,6 @@ static void update_door_state(const gdo_door_state_t door_state)
 {
   static int64_t start_opening;
   static int64_t start_closing;
-
-  ESP_LOGD(TAG, "Door state: %s", gdo_door_state_str[door_state]);
 
   if (!g_status.open_ms)
   {
@@ -2377,10 +2385,15 @@ static void update_door_state(const gdo_door_state_t door_state)
   static int32_t previous_door_target = -1;
   if ((door_state != g_status.door) || (previous_door_position != g_status.door_position) || (previous_door_target != g_status.door_target))
   {
+    ESP_LOGD(TAG, "Door state: %s", gdo_door_state_str[door_state]);
     g_status.door = door_state;
     previous_door_position = g_status.door_position;
     previous_door_target = g_status.door_target;
     queue_event((gdo_event_t){GDO_EVENT_DOOR_POSITION_UPDATE});
+  }
+  else
+  {
+    ESP_LOGV(TAG, "Door state: %s", gdo_door_state_str[door_state]);
   }
 }
 
@@ -2481,11 +2494,15 @@ inline static esp_err_t send_door_action(gdo_door_action_t action)
  */
 inline static void update_light_state(gdo_light_state_t light_state)
 {
-  ESP_LOGD(TAG, "Light state: %s", gdo_light_state_str[light_state]);
   if (light_state != g_status.light)
   {
+    ESP_LOGD(TAG, "Light state: %s", gdo_light_state_str[light_state]);
     g_status.light = light_state;
     queue_event((gdo_event_t){GDO_EVENT_LIGHT_UPDATE});
+  }
+  else
+  {
+    ESP_LOGV(TAG, "Light state: %s", gdo_light_state_str[light_state]);
   }
 }
 
@@ -2495,12 +2512,16 @@ inline static void update_light_state(gdo_light_state_t light_state)
  */
 inline static void update_lock_state(gdo_lock_state_t lock_state)
 {
-  ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
   if (lock_state != g_status.lock)
   {
+    ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
     g_status.lock = lock_state;
     queue_event((gdo_event_t){GDO_EVENT_LOCK_UPDATE});
-  };
+  }
+  else
+  {
+    ESP_LOGV(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
+  }
 }
 
 /**
@@ -2511,12 +2532,15 @@ inline static void update_lock_state(gdo_lock_state_t lock_state)
 inline static void
 update_obstruction_state(gdo_obstruction_state_t obstruction_state)
 {
-  ESP_LOGD(TAG, "Obstruction state: %s",
-           gdo_obstruction_state_str[obstruction_state]);
   if (obstruction_state != g_status.obstruction)
   {
+    ESP_LOGD(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
     g_status.obstruction = obstruction_state;
     queue_event((gdo_event_t){GDO_EVENT_OBST});
+  }
+  else
+  {
+    ESP_LOGV(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
   }
 }
 
