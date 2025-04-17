@@ -19,6 +19,8 @@
 #include "gdo.h"
 #include "gdo_priv.h"
 
+static const char *TAG = "gdo_utils";
+
 const char *gdo_door_state_str[] = {
     "Unknown",
     "Open",
@@ -214,11 +216,11 @@ void print_buffer(gdo_protocol_type_t protocol, uint8_t *buf, bool is_tx)
 {
     if (protocol == GDO_PROTOCOL_DRY_CONTACT)
     {
-        ESP_LOGD(TAG, "Dry Contact set pin %2d to %1d", buf[0], buf[1]);
+        ESP_LOGV(TAG, "Dry Contact set pin %2d to %1d", buf[0], buf[1]);
     }
     else if (protocol == GDO_PROTOCOL_SEC_PLUS_V2)
     {
-        ESP_LOGD(TAG, "%s: "
+        ESP_LOGV(TAG, "%s: "
                       "[%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X]",
                  is_tx ? "TX" : "RX",
                  buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
@@ -226,11 +228,11 @@ void print_buffer(gdo_protocol_type_t protocol, uint8_t *buf, bool is_tx)
     }
     else if (is_tx)
     {
-        ESP_LOGD(TAG, "TX [%02X]", buf[0]);
+        ESP_LOGV(TAG, "TX [%02X]", buf[0]);
     }
     else
     {
-        ESP_LOGD(TAG, "RX [%02X %02X]", buf[0], buf[1]);
+        ESP_LOGV(TAG, "RX [%02X %02X]", buf[0], buf[1]);
     }
 }
 
