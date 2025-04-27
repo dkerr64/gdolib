@@ -103,7 +103,7 @@ static gdo_status_t g_status = {
     .obst_test_pulse_timer_active = false,
     .obst_test_pulse_timer_usecs = 50000,
     .vehicle_parked_threshold = 100,
-    .vehicle_parked_threshold_variance=5,
+    .vehicle_parked_threshold_variance = 5,
 };
 
 static bool g_protocol_forced;
@@ -124,6 +124,9 @@ static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
+
+const static uint32_t OBST_CHECK_PERIOD = 100; // Milliseconds between checks for obstruction
+const static uint32_t OBST_LOWER_LIMIT = 1;    // Number of pulses to consider clear state
 
 /******************************* PUBLIC API FUNCTIONS **********************************/
 
@@ -189,9 +192,11 @@ esp_err_t gdo_init(const gdo_config_t *config)
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_ANYEDGE,
+        .intr_type = GPIO_INTR_NEGEDGE,
     };
     static gdo_obstruction_stats_t obst_stats;
+    portMUX_INITIALIZE(&obst_stats.mux);
+    obst_stats.sleep_micros = 0;
 
     err = gpio_config(&io_conf);
     if (err != ESP_OK)
@@ -218,7 +223,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
     err = esp_timer_create(&timer_args, &obst_timer);
 
     // Check the obstruction pulse counts every 100ms
-    err = esp_timer_start_periodic(obst_timer, 100000);
+    err = esp_timer_start_periodic(obst_timer, OBST_CHECK_PERIOD * 1000);
 
     if (err != ESP_OK)
     {
@@ -1352,14 +1357,15 @@ done:
 static void IRAM_ATTR obst_isr_handler(void *arg)
 {
   gdo_obstruction_stats_t *stats = (gdo_obstruction_stats_t *)arg;
-  stats->sleep_micros = esp_timer_get_time();
+  portENTER_CRITICAL_ISR(&stats->mux);
   ++stats->count;
+  portEXIT_CRITICAL_ISR(&stats->mux);
 }
 
 /****************************** TIMER CALLBACKS ************************************/
 
 /**
- * @brief Runs every 100ms anch checks the count of obstruction interrupts.
+ * @brief Runs every 100ms and checks the count of obstruction interrupts.
  * @details 1 or more interrupts in 100ms is considered clear, 0 with the pin low
  * is asleep, and 0 with the pin high is obstructed. When the obstruction state
  * changes an event of GDO_EVENT_OBST is queued.
@@ -1370,26 +1376,42 @@ static void obst_timer_cb(void *arg)
   int64_t micros_now = esp_timer_get_time();
   gdo_obstruction_state_t obs_state = g_status.obstruction;
 
-  if (stats->count >= 1)
+  portENTER_CRITICAL(&stats->mux);
+  if (stats->count >= OBST_LOWER_LIMIT)
   {
+    // Pulses being received, sensor is working and clear
     obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+    stats->count = 0;
+    portEXIT_CRITICAL(&stats->mux);
   }
-  else if ((stats->count == 0) && (micros_now - stats->sleep_micros < 750000))
+  else if (stats->count == 0)
   {
-    obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+    // If there have been no pulses then the pin is steady high or low.
+    if (gpio_get_level(g_config.obst_in_pin))
+    {
+      // sensor is asleep
+      stats->sleep_micros = micros_now;
+    }
+    else
+    {
+      // if last asleep more than 700ms ago, then there is an obstruction present
+      if (micros_now - stats->sleep_micros > 700 * 1000)
+      {
+        obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
+      }
+    }
+    portEXIT_CRITICAL(&stats->mux);
   }
   else
   {
-    obs_state = GDO_OBSTRUCTION_STATE_OBSTRUCTED;
+    // count is between one and OBST_LOWER_LIMIT, leave state unchanged
+    portEXIT_CRITICAL(&stats->mux);
   }
 
-  if (obs_state != GDO_OBSTRUCTION_STATE_MAX && obs_state != g_status.obstruction)
+  if (obs_state != g_status.obstruction)
   {
-    g_status.obstruction = obs_state;
     update_obstruction_state(obs_state);
-    queue_event((gdo_event_t){GDO_EVENT_OBST});
   }
-  stats->count = 0;
 }
 
 /**
