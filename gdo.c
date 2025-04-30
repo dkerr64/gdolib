@@ -2688,11 +2688,9 @@ inline static void update_button_state(gdo_button_state_t button_state)
     get_status();
   }
 
-  if (button_state != g_status.button)
-  {
-    g_status.button = button_state;
-    send_event(GDO_CB_EVENT_BUTTON);
-  }
+  // Send event even if state is the same, so callback always notfied even if repeated multiple times
+  g_status.button = button_state;
+  send_event(GDO_CB_EVENT_BUTTON);
 }
 
 /**
