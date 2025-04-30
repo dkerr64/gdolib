@@ -2616,6 +2616,11 @@ inline static void handle_light_action(gdo_light_action_t light_action)
       light_state = light_state == GDO_LIGHT_STATE_OFF ? GDO_LIGHT_STATE_ON
                                                        : GDO_LIGHT_STATE_OFF;
     }
+    // We get toggle when wall panel light button pressed and released
+    g_status.button = GDO_BUTTON_STATE_PRESSED;
+    send_event(GDO_CB_EVENT_BUTTON);
+    g_status.button = GDO_BUTTON_STATE_RELEASED;
+    send_event(GDO_CB_EVENT_BUTTON);
     break;
   default:
     light_state = GDO_LIGHT_STATE_MAX;
