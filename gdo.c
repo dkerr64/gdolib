@@ -2399,7 +2399,11 @@ static void update_door_state(const gdo_door_state_t door_state)
     }
 
     g_door_start_moving_ms = 0;
-    g_status.motor = GDO_MOTOR_STATE_OFF;
+    if (g_status.motor != GDO_MOTOR_STATE_OFF)
+    {
+      g_status.motor = GDO_MOTOR_STATE_OFF;
+      send_event(GDO_CB_EVENT_MOTOR);
+    }
   }
 
   if (g_status.door == GDO_DOOR_STATE_UNKNOWN &&
