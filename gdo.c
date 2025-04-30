@@ -2392,8 +2392,9 @@ static void update_door_state(const gdo_door_state_t door_state)
     else if (door_state == GDO_DOOR_STATE_CLOSED)
     {
       g_status.door_position = 10000;
-      if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
+      if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 && g_status.door != GDO_DOOR_STATE_CLOSED)
       {
+        // Only update openings if status is changing to closed (ie, not steady state closed)
         get_openings();
       }
     }
