@@ -2592,10 +2592,10 @@ inline static void update_learn_state(gdo_learn_state_t learn_state)
   {
     g_status.learn = learn_state;
     send_event(GDO_CB_EVENT_LEARN);
-  }
-  if (learn_state == GDO_LEARN_STATE_INACTIVE && g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
-  {
-    get_paired_devices(GDO_PAIRED_DEVICE_TYPE_ALL);
+    if (learn_state == GDO_LEARN_STATE_INACTIVE && g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
+    {
+      get_paired_devices(GDO_PAIRED_DEVICE_TYPE_ALL);
+    }
   }
 }
 
