@@ -2719,13 +2719,12 @@ inline static void update_motion_state(gdo_motion_state_t motion_state)
     // We use queue event rather than send event to ensure that the callback
     // function is called from the main thread (same thread as all other callbacks).
     queue_event((gdo_event_t){GDO_EVENT_MOTION_UPDATE});
-  }
 
-  if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
-  {
-    // Why are we calling get status with every motion, even on motion timeout?
-    // This creates a lot of unnecessary traffic on serial comms.
-    get_status();
+    if (g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2 && motion_state == GDO_MOTION_STATE_DETECTED && g_status.light == GDO_LIGHT_STATE_OFF)
+    {
+      // If motion detected and light is off, then request status to update light state (which may have turned on)
+      get_status();
+    }
   }
 }
 
