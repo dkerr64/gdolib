@@ -2324,13 +2324,13 @@ static void update_door_state(const gdo_door_state_t door_state)
         g_status.door == GDO_DOOR_STATE_CLOSED)
     {
       start_opening = esp_timer_get_time();
+      ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
     }
     if (door_state == GDO_DOOR_STATE_OPEN &&
         g_status.door == GDO_DOOR_STATE_OPENING && start_opening != 0)
     {
-      g_status.open_ms =
-          (uint16_t)((esp_timer_get_time() - start_opening) / 1000ULL);
-      ESP_LOGV(TAG, "Open time: %u", g_status.open_ms);
+      g_status.open_ms = (uint16_t)((esp_timer_get_time() - start_opening) / 1000LL);
+      ESP_LOGD(TAG, "Open time: %u", g_status.open_ms);
       send_event(GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT);
     }
     if (door_state == GDO_DOOR_STATE_STOPPED)
@@ -2345,13 +2345,13 @@ static void update_door_state(const gdo_door_state_t door_state)
         g_status.door == GDO_DOOR_STATE_OPEN)
     {
       start_closing = esp_timer_get_time();
+      ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
     }
     if (door_state == GDO_DOOR_STATE_CLOSED &&
         g_status.door == GDO_DOOR_STATE_CLOSING && start_closing != 0)
     {
-      g_status.close_ms =
-          (uint16_t)((esp_timer_get_time() - start_closing) / 1000ULL);
-      ESP_LOGV(TAG, "Close time: %u", g_status.close_ms);
+      g_status.close_ms = (uint16_t)((esp_timer_get_time() - start_closing) / 1000LL);
+      ESP_LOGD(TAG, "Close time: %u", g_status.close_ms);
       send_event(GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT);
     }
     if (door_state == GDO_DOOR_STATE_STOPPED)
