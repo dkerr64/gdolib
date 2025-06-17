@@ -98,6 +98,7 @@ static gdo_status_t g_status = {
     .door_target = -1,
     .client_id = 0x5AFE,
     .toggle_only = false,
+    .obst_override = false,
     .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
     .tof_timer_active = false,
     .tof_timer_usecs = 250000,
@@ -1380,6 +1381,14 @@ static void obst_timer_cb(void *arg)
   gdo_obstruction_state_t obs_state = g_status.obstruction;
 
   portENTER_CRITICAL(&stats->mux);
+  if (g_status.obst_override) {
+    // If override is enabled, we assume the sensor is clear
+    if (obs_state != GDO_OBSTRUCTION_STATE_CLEAR) obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+    stats->sleep_micros = micros_now; // reset sleep time
+    portEXIT_CRITICAL(&stats->mux);
+    return;
+  }
+
   if (stats->count >= OBST_LOWER_LIMIT)
   {
     // Pulses being received, sensor is working and clear
@@ -2796,6 +2805,15 @@ esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled)
   g_status.tof_timer_active = enabled;
   g_status.tof_timer_usecs = interval;
   return err;
+}
+
+/**
+ * @brief Enables or disables obstruction override, some openers that do not have obstruction sensors connected.
+ * @param obst_override true to enable override, false to disable.
+ */
+void gdo_set_obst_override(bool obst_override) {
+  g_status.obst_override = obst_override;
+  ESP_LOGI(TAG, "Obstruction override %s", obst_override ? "enabled" : "disabled");
 }
 
 /**

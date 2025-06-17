@@ -164,6 +164,7 @@ extern "C"
         bool synced;                          // Synced state
         bool ttc_enabled;                     // ttc active
         bool toggle_only;                     // Used when the door opener only supports the toggle command.
+        bool obst_override;                   // Used when the door opener has no obstruction sensors.
         bool tof_timer_active;                // ToF interval timer active
         bool obst_test_pulse_timer_active;    // Obstruction test pulse output pin timer active
         uint16_t openings;                    // Number of openings
@@ -468,6 +469,12 @@ extern "C"
      * @param toggle_only true to enable toggle only mode, false to disable.
      */
     void gdo_set_toggle_only(bool toggle_only);
+
+    /**
+     * @brief Enables or disables obstruction override, some openers that do not have obstruction sensors connected.
+     * @param obst_override true to enable override, false to disable.
+     */
+    void gdo_set_obst_override(bool obst_override);
 
     /************************************* VEHICLE Functions *****************************************/
 
