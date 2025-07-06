@@ -1177,6 +1177,7 @@ static void gdo_sync_task(void *arg)
 
   if (g_status.protocol != GDO_PROTOCOL_SEC_PLUS_V2)
   {
+    // Protocol not previously forced to V2, so try a V1 sync.
     uart_set_baudrate(g_config.uart_num, 1200);
     uart_set_parity(g_config.uart_num, UART_PARITY_EVEN);
     uart_flush(g_config.uart_num);
@@ -1187,7 +1188,7 @@ static void gdo_sync_task(void *arg)
 
     if (g_status.door == GDO_DOOR_STATE_UNKNOWN)
     {
-      ESP_LOGW(TAG, "V1 panel not found, trying emulation");
+      ESP_LOGW(TAG, "SYNC TASK: V1 panel not found, trying emulation");
       esp_timer_create_args_t timer_args = {.callback = v1_status_timer_cb,
                                             .arg = NULL,
                                             .dispatch_method = ESP_TIMER_TASK,
@@ -1195,38 +1196,52 @@ static void gdo_sync_task(void *arg)
 
       if (esp_timer_create(&timer_args, &v1_status_timer) != ESP_OK)
       {
-        ESP_LOGE(TAG, "Failed to create V1 status timer");
+        ESP_LOGE(TAG, "SYNC TASK: Failed to create V1 status timer");
         synced = false;
         goto done;
       }
       else
       {
+        synced = false;
         uart_flush(g_config.uart_num);
         xQueueReset(gdo_event_queue);
+        xQueueReset(gdo_tx_queue);
         esp_timer_start_periodic(v1_status_timer, 250 * 1000);
       }
 
-      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
-
-      if (g_status.door == GDO_DOOR_STATE_UNKNOWN && !g_protocol_forced)
+      ESP_LOGI(TAG, "SYNC TASK: Wait up to 5 seconds to see if V1 panel emulation working");
+      if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000)) && g_status.door == GDO_DOOR_STATE_UNKNOWN)
       {
-        ESP_LOGW(TAG, "secplus V1 panel emulation failed, trying secplus V2 panel emulation");
+        ESP_LOGW(TAG, "SYNC TASK: secplus V1 panel emulation failed.");
         esp_timer_stop(v1_status_timer);
         esp_timer_delete(v1_status_timer);
+        synced = false;
+        if (g_protocol_forced)
+          goto done; // User forced use of V1, do do not attempt to sync as V2.
       }
       else
       {
+        ESP_LOGI(TAG, "SYNC TASK: secplus V1 panel emulation success.");
+        synced = true;
         goto done;
       }
     }
     else
     {
-      ESP_LOGI(TAG, "V1 panel found");
-      g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL;
+      ESP_LOGI(TAG, "SYNC TASK: Known door state: %s", gdo_door_state_to_string(g_status.door));
+      if (!esp_timer_is_active(v1_status_timer))
+      {
+        // if timer is active then we are emulating a V1 panel, don't change to smart panel
+        ESP_LOGI(TAG, "SYNC TASK: V1 smart panel found");
+        g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL;
+      }
+      synced = true;
       goto done;
     }
   }
 
+  // V1 setup has somehow failed.  Try and do a V2 sync
+  ESP_LOGI(TAG, "SYNC TASK: Initialize V2 syncing");
   uint32_t timeout = esp_timer_get_time() / 1000 + 5000;
   uint8_t sync_stage = 0;
   g_status.protocol = GDO_PROTOCOL_SEC_PLUS_V2;
@@ -1234,6 +1249,7 @@ static void gdo_sync_task(void *arg)
   uart_set_parity(g_config.uart_num, UART_PARITY_DISABLE);
   uart_flush(g_config.uart_num);
   xQueueReset(gdo_event_queue);
+  xQueueReset(gdo_tx_queue);
 
   // We send a get openings because if we have a new client ID then the
   // first command may be ignored, and sometime doors will throw away
@@ -1381,9 +1397,11 @@ static void obst_timer_cb(void *arg)
   gdo_obstruction_state_t obs_state = g_status.obstruction;
 
   portENTER_CRITICAL(&stats->mux);
-  if (g_status.obst_override) {
+  if (g_status.obst_override)
+  {
     // If override is enabled, we assume the sensor is clear
-    if (obs_state != GDO_OBSTRUCTION_STATE_CLEAR) obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
+    if (obs_state != GDO_OBSTRUCTION_STATE_CLEAR)
+      obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
     stats->sleep_micros = micros_now; // reset sleep time
     portEXIT_CRITICAL(&stats->mux);
     return;
@@ -1713,8 +1731,7 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
     uint32_t data =
         (byte2 << 24) | (byte1 << 16) | (nibble << 8) | (cmd & 0xff);
 
-    if (encode_wireline(g_status.rolling_code, fixed, data, message.packet) !=
-        0)
+    if (encode_wireline(g_status.rolling_code, fixed, data, message.packet) != 0)
     {
       free(message.packet);
       return ESP_FAIL;
@@ -1735,6 +1752,8 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
   print_buffer(g_status.protocol, message.packet, true);
   if (xQueueSendToBack(gdo_tx_queue, &message, 0) == pdFALSE)
   {
+    ESP_LOGE(TAG, "gdo TX queue full!");
+    free(message.packet);
     return ESP_ERR_NO_MEM;
   }
 
@@ -2811,7 +2830,8 @@ esp_err_t gdo_set_tof_timer(uint32_t interval, bool enabled)
  * @brief Enables or disables obstruction override, some openers that do not have obstruction sensors connected.
  * @param obst_override true to enable override, false to disable.
  */
-void gdo_set_obst_override(bool obst_override) {
+void gdo_set_obst_override(bool obst_override)
+{
   g_status.obst_override = obst_override;
   ESP_LOGI(TAG, "Obstruction override %s", obst_override ? "enabled" : "disabled");
 }
