@@ -232,10 +232,10 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
   }
-  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT)
+  else if (g_status.protocol == GDO_PROTOCOL_DRY_CONTACT && g_config.obst_in_pin <= 0 && !g_config.obst_from_status)
   {
-    // dry contact protocol requires obstruction sensor input pin
-    ESP_LOGE(TAG, "Failed to initialize GDOLIB... dry contact protocol requires obstruction sensor GPIO pin");
+    // dry contact protocol requires either obstruction sensor input pin or obst_from_status
+    ESP_LOGE(TAG, "Failed to initialize GDOLIB... dry contact protocol requires either obstruction sensor GPIO pin or obst_from_status enabled");
     return ESP_FAIL;
   }
   else if (g_config.dc_close_pin > 0 || g_config.dc_open_pin > 0)
@@ -1279,14 +1279,10 @@ static void gdo_sync_task(void *arg)
       timeout += 1000;
     }
 
-    if (g_status.openings == 0)
+    if (sync_stage < 2)
     {
       ESP_LOGI(TAG, "SYNC TASK: Getting openings");
       get_openings();
-      continue;
-    }
-    else if (sync_stage < 2)
-    {
       sync_stage = 2;
       timeout += 1000;
     }
