@@ -123,7 +123,7 @@ static esp_timer_handle_t tof_timer;
 static esp_timer_handle_t obst_test_pulse_timer;
 static esp_timer_handle_t v1_status_timer;
 static void *g_user_cb_arg;
-static uint32_t g_tx_delay_ms = 50;
+static uint32_t g_tx_delay_ms = GDO_MIN_COMMAND_INTERVAL_MS;
 static uint32_t g_ttc_delay_s = 0;
 static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -1151,9 +1151,9 @@ esp_err_t gdo_set_close_duration(uint16_t ms)
  */
 esp_err_t gdo_set_min_command_interval(uint32_t ms)
 {
-  if (ms < 300)
+  if (ms < GDO_MIN_COMMAND_INTERVAL_MS)
   {
-    ESP_LOGE(TAG, "Invalid minimum command interval: %" PRIu32, ms);
+    ESP_LOGE(TAG, "Invalid minimum command interval: %" PRIu32 ", minimum allowed: %d", ms, GDO_MIN_COMMAND_INTERVAL_MS);
     return ESP_ERR_INVALID_ARG;
   }
 
@@ -1841,6 +1841,13 @@ static void decode_v1_packet(uint8_t *packet)
   gdo_v1_command_t cmd = (gdo_v1_command_t)packet[0];
   uint8_t resp = packet[1];
 
+  // Quietly ignore invalid commands (likely mark/space bytes or noise)
+  if (!GDO_V1_CMD_IS_VALID(cmd))
+  {
+    ESP_LOGD(TAG, "Ignoring invalid V1 command: 0x%02x", cmd);
+    return;
+  }
+
   if (cmd == V1_CMD_QUERY_DOOR_STATUS)
   {
     gdo_door_state_t door_state = GDO_DOOR_STATE_UNKNOWN;
@@ -2126,34 +2133,37 @@ static void gdo_main_task(void *arg)
 
           if (rx_buf_index >= GDO_PACKET_SIZE)
           {
-            uint8_t i = 0;
-            bool odd = rx_buf_index % 2 != 0;
-            if (odd)
+            // Filter out invalid bytes before processing to prevent mark/space bytes from being processed
+            uint8_t filtered_buffer[RX_BUFFER_SIZE * 2];
+            uint8_t filtered_index = 0;
+            
+            for (uint8_t i = 0; i < rx_buf_index; i++)
             {
-              if (rx_buffer[0] <= V1_CMD_MIN || rx_buffer[0] >= V1_CMD_MAX)
+              if (GDO_V1_CMD_IS_VALID(rx_buffer[i]) || (i > 0 && GDO_V1_CMD_IS_VALID(rx_buffer[i-1])))
               {
-                i = 1; // Skip first byte if it's not a valid command
+                // Keep valid commands and their response bytes
+                filtered_buffer[filtered_index++] = rx_buffer[i];
               }
               else
               {
-                // Decrement the buffer index so we don't over read the buffer in the loop
-                --rx_buf_index;
+                ESP_LOGD(TAG, "Filtering out invalid/noise byte: 0x%02x", rx_buffer[i]);
               }
             }
-
+            
+            // Process filtered buffer in pairs
             uint8_t pkt[2];
-            for (; i < rx_buf_index; i += 2)
+            for (uint8_t i = 0; i < filtered_index - 1; i += 2)
             {
-              pkt[0] = rx_buffer[i];
-              pkt[1] = rx_buffer[i + 1];
+              pkt[0] = filtered_buffer[i];
+              pkt[1] = filtered_buffer[i + 1];
               print_buffer(g_status.protocol, pkt, false);
               decode_v1_packet(pkt);
             }
-
-            // if we decremented the buffer index then we need to move the last byte to the start
-            if (odd && rx_buf_index % 2 == 0)
+            
+            // Handle any remaining byte
+            if (filtered_index % 2 != 0)
             {
-              rx_buffer[0] = rx_buffer[rx_buf_index];
+              rx_buffer[0] = filtered_buffer[filtered_index - 1];
               rx_buf_index = 1;
             }
             else

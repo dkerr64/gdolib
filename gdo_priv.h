@@ -42,6 +42,13 @@ extern "C"
 // Task stack size definitions
 #define GDO_TASK_STACK_SIZE 4096         // Standard stack size for all GDO tasks
 
+// Command timing definitions
+#define GDO_MIN_COMMAND_INTERVAL_MS 50   // Minimum interval between commands (matches internal default)
+
+// V1 protocol validation
+#define GDO_V1_CMD_IS_VALID(cmd) ((cmd) > V1_CMD_MIN && (cmd) < V1_CMD_MAX)
+
+
     typedef enum
     {
         GDO_CMD_UNKNOWN = 0x000,
