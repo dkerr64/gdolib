@@ -33,6 +33,15 @@ extern "C"
 #define GDO_DRY_CONTACT_DEBOUNCE_MS 50
 #define GDO_DRY_CONTACT_PULSE_WIDTH_MS 250
 
+// Task priority definitions for good real-time response
+#define GDO_TASK_PRIORITY_HIGH 18        // Contact ISR tasks - highest priority for real-time response
+#define GDO_TASK_PRIORITY_MEDIUM_HIGH 16 // Main task - medium-high priority for processing
+#define GDO_TASK_PRIORITY_MEDIUM 14      // Sync task - medium priority for background sync
+#define GDO_ISR_PRIORITY 2               // GPIO ISR service priority
+
+// Task stack size definitions
+#define GDO_TASK_STACK_SIZE 4096         // Standard stack size for all GDO tasks
+
     typedef enum
     {
         GDO_CMD_UNKNOWN = 0x000,

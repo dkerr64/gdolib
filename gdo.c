@@ -206,7 +206,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
       return err;
     }
 
-    err = gpio_install_isr_service(0);
+    err = gpio_install_isr_service(GDO_ISR_PRIORITY);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
     {
       return err;
@@ -241,7 +241,7 @@ esp_err_t gdo_init(const gdo_config_t *config)
   else if (g_config.dc_close_pin > 0 || g_config.dc_open_pin > 0)
   {
     // we need to install gpio isr service for later use
-    err = gpio_install_isr_service(0);
+    err = gpio_install_isr_service(GDO_ISR_PRIORITY);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
     {
       return err;
@@ -531,11 +531,11 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
     static gdo_contact_t info;
     info.contact = GDO_CONTACT_DOOR_OPEN;
     info.pin = g_config.dc_open_pin;
-    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+    // High priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
-    if (xTaskCreate(gdo_contact_task, "gdo_open_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1]) != pdPASS)
+    if (xTaskCreate(gdo_contact_task, "gdo_open_ISR", GDO_TASK_STACK_SIZE, &info, GDO_TASK_PRIORITY_HIGH, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1]) != pdPASS)
 #else
-    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_open_ISR", 4096, &info, 15, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1], 1) != pdPASS)
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_open_ISR", GDO_TASK_STACK_SIZE, &info, GDO_TASK_PRIORITY_HIGH, &gdo_contact_task_handle[GDO_CONTACT_DOOR_OPEN - 1], 1) != pdPASS)
 #endif
     {
       return ESP_ERR_NO_MEM;
@@ -548,22 +548,22 @@ esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg)
     static gdo_contact_t info;
     info.contact = GDO_CONTACT_DOOR_CLOSE;
     info.pin = g_config.dc_close_pin;
-    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+    // High priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
-    if (xTaskCreate(gdo_contact_task, "gdo_close_ISR", 4096, &info, 16, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1]) != pdPASS)
+    if (xTaskCreate(gdo_contact_task, "gdo_close_ISR", GDO_TASK_STACK_SIZE, &info, GDO_TASK_PRIORITY_HIGH, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1]) != pdPASS)
 #else
-    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_close_ISR", 4096, &info, 15, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1], 1) != pdPASS)
+    if (xTaskCreatePinnedToCore(gdo_contact_task, "gdo_close_ISR", GDO_TASK_STACK_SIZE, &info, GDO_TASK_PRIORITY_HIGH, &gdo_contact_task_handle[GDO_CONTACT_DOOR_CLOSE - 1], 1) != pdPASS)
 #endif
     {
       return ESP_ERR_NO_MEM;
     }
   }
 
-  // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+  // Medium-high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
-  if (xTaskCreate(gdo_main_task, "gdo_main_task", 4096, NULL, 15, &gdo_main_task_handle) != pdPASS)
+  if (xTaskCreate(gdo_main_task, "gdo_main_task", GDO_TASK_STACK_SIZE, NULL, GDO_TASK_PRIORITY_MEDIUM_HIGH, &gdo_main_task_handle) != pdPASS)
 #else
-  if (xTaskCreatePinnedToCore(gdo_main_task, "gdo_main_task", 4096, NULL, 15, &gdo_main_task_handle, 1) != pdPASS)
+  if (xTaskCreatePinnedToCore(gdo_main_task, "gdo_main_task", GDO_TASK_STACK_SIZE, NULL, GDO_TASK_PRIORITY_MEDIUM_HIGH, &gdo_main_task_handle, 1) != pdPASS)
 #endif
   {
     return ESP_ERR_NO_MEM;
@@ -622,11 +622,11 @@ esp_err_t gdo_sync(void)
 
   if (!gdo_sync_task_handle)
   {
-    // Medium high priority as it needs to handle in real time, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
+    // Medium priority for background sync, pin to CPU 1 so does not share with HomeKit/WiFi/mdns/etc.
 #ifdef CONFIG_FREERTOS_UNICORE
-    if (xTaskCreate(gdo_sync_task, "gdo_task", 4096, NULL, 15, &gdo_sync_task_handle) != pdPASS)
+    if (xTaskCreate(gdo_sync_task, "gdo_sync_task", GDO_TASK_STACK_SIZE, NULL, GDO_TASK_PRIORITY_MEDIUM, &gdo_sync_task_handle) != pdPASS)
 #else
-    if (xTaskCreatePinnedToCore(gdo_sync_task, "gdo_task", 4096, NULL, 15, &gdo_sync_task_handle, 1) != pdPASS)
+    if (xTaskCreatePinnedToCore(gdo_sync_task, "gdo_sync_task", GDO_TASK_STACK_SIZE, NULL, GDO_TASK_PRIORITY_MEDIUM, &gdo_sync_task_handle, 1) != pdPASS)
 #endif
     {
       return ESP_ERR_NO_MEM;
