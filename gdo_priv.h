@@ -31,7 +31,23 @@ extern "C"
 #define RX_BUFFER_SIZE 160
 #define GDO_PACKET_SIZE ((g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2) ? 19UL : 2UL)
 #define GDO_DRY_CONTACT_DEBOUNCE_MS 50
-#define GDO_DRY_CONTACT_PULSE_WIDTH_MS 200
+#define GDO_DRY_CONTACT_PULSE_WIDTH_MS 250
+
+// Task priority definitions for good real-time response
+#define GDO_TASK_PRIORITY_HIGH 18        // Contact ISR tasks - highest priority for real-time response
+#define GDO_TASK_PRIORITY_MEDIUM_HIGH 16 // Main task - medium-high priority for processing
+#define GDO_TASK_PRIORITY_MEDIUM 14      // Sync task - medium priority for background sync
+#define GDO_ISR_PRIORITY 2               // GPIO ISR service priority
+
+// Task stack size definitions
+#define GDO_TASK_STACK_SIZE 4096         // Standard stack size for all GDO tasks
+
+// Command timing definitions
+#define GDO_MIN_COMMAND_INTERVAL_MS 50   // Minimum interval between commands (matches internal default)
+
+// V1 protocol validation
+#define GDO_V1_CMD_IS_VALID(cmd) ((cmd) > V1_CMD_MIN && (cmd) < V1_CMD_MAX)
+
 
     typedef enum
     {
