@@ -1914,22 +1914,23 @@ static void decode_packet(uint8_t *packet)
 
   decode_wireline(packet, &rolling, &fixed, &data);
 
+  uint8_t parity = (data >> 12) & 0x0f;
   data &= ~0xf000;
 
   if ((fixed & 0xFFFFFFFF) == g_status.client_id)
   { // my commands
     ESP_LOGE(TAG,
              "received mine: rolling=%07" PRIx32 " fixed=%010" PRIx64
-             " data=%08" PRIx32,
-             rolling, fixed, data);
+             " data=%08" PRIx32 " parity=%01" PRIx8,
+             rolling, fixed, data, parity);
     return;
   }
   else
   {
     ESP_LOGI(TAG,
              "received rolling=%07" PRIx32 " fixed=%010" PRIx64
-             " data=%08" PRIx32,
-             rolling, fixed, data);
+             " data=%08" PRIx32 " parity=%01" PRIx8,
+             rolling, fixed, data, parity);
   }
 
   gdo_command_t cmd = ((fixed >> 24) & 0xf00) | (data & 0xff);
@@ -1937,8 +1938,8 @@ static void decode_packet(uint8_t *packet)
   uint8_t byte1 = (data >> 16) & 0xff;
   uint8_t byte2 = (data >> 24) & 0xff;
 
-  ESP_LOGI(TAG, "cmd=%03x (%s) byte2=%02x byte1=%02x nibble=%01x", cmd,
-           cmd_to_string(cmd), byte2, byte1, nibble);
+  ESP_LOGI(TAG, "cmd=%03x (%s) byte2=%02x byte1=%02x nibble=%01x parity=%01x", cmd,
+           cmd_to_string(cmd), byte2, byte1, nibble, parity);
 
   if (cmd == GDO_CMD_STATUS)
   {
@@ -1949,6 +1950,16 @@ static void decode_packet(uint8_t *packet)
     if (g_config.obst_from_status)
     {
       update_obstruction_state((gdo_obstruction_state_t)((byte1 >> 6) & 1));
+    }
+  }
+  else if (cmd == GDO_CMD_PAIR_3_RESP)
+  {
+    if (g_config.obst_from_status && (parity == 3 || parity == 4))
+    {
+      // Use Pair3Resp packets for obstruction detection via parity
+      // Parity 3 = clear, Parity 4 = obstructed
+      // or should it be byte1 9 = clear, byte1 14 = obstructed ??
+      update_obstruction_state((parity == 3) ? GDO_OBSTRUCTION_STATE_CLEAR : GDO_OBSTRUCTION_STATE_OBSTRUCTED);
     }
   }
   else if (cmd == GDO_CMD_LIGHT)
@@ -2136,10 +2147,10 @@ static void gdo_main_task(void *arg)
             // Filter out invalid bytes before processing to prevent mark/space bytes from being processed
             uint8_t filtered_buffer[RX_BUFFER_SIZE * 2];
             uint8_t filtered_index = 0;
-            
+
             for (uint8_t i = 0; i < rx_buf_index; i++)
             {
-              if (GDO_V1_CMD_IS_VALID(rx_buffer[i]) || (i > 0 && GDO_V1_CMD_IS_VALID(rx_buffer[i-1])))
+              if (GDO_V1_CMD_IS_VALID(rx_buffer[i]) || (i > 0 && GDO_V1_CMD_IS_VALID(rx_buffer[i - 1])))
               {
                 // Keep valid commands and their response bytes
                 filtered_buffer[filtered_index++] = rx_buffer[i];
@@ -2149,7 +2160,7 @@ static void gdo_main_task(void *arg)
                 ESP_LOGD(TAG, "Filtering out invalid/noise byte: 0x%02x", rx_buffer[i]);
               }
             }
-            
+
             // Process filtered buffer in pairs
             uint8_t pkt[2];
             for (uint8_t i = 0; i < filtered_index - 1; i += 2)
@@ -2159,7 +2170,7 @@ static void gdo_main_task(void *arg)
               print_buffer(g_status.protocol, pkt, false);
               decode_v1_packet(pkt);
             }
-            
+
             // Handle any remaining byte
             if (filtered_index % 2 != 0)
             {
