@@ -2459,7 +2459,7 @@ static void update_door_state(const gdo_door_state_t door_state)
   static int32_t previous_door_target = -1;
   if ((door_state != g_status.door) || (previous_door_position != g_status.door_position) || (previous_door_target != g_status.door_target))
   {
-    ESP_LOGD(TAG, "Door state: %s", gdo_door_state_str[door_state]);
+    ESP_LOGD(TAG, "Door state: %s", gdo_door_state_to_string(door_state));
     g_status.door = door_state;
     previous_door_position = g_status.door_position;
     previous_door_target = g_status.door_target;
@@ -2467,7 +2467,7 @@ static void update_door_state(const gdo_door_state_t door_state)
   }
   else
   {
-    ESP_LOGV(TAG, "Door state: %s", gdo_door_state_str[door_state]);
+    ESP_LOGV(TAG, "Door state: %s", gdo_door_state_to_string(door_state));
   }
 }
 
@@ -2570,13 +2570,13 @@ inline static void update_light_state(gdo_light_state_t light_state)
 {
   if (light_state != g_status.light)
   {
-    ESP_LOGD(TAG, "Light state: %s", gdo_light_state_str[light_state]);
+    ESP_LOGD(TAG, "Light state: %s", gdo_light_state_to_string(light_state));
     g_status.light = light_state;
     send_event(GDO_CB_EVENT_LIGHT);
   }
   else
   {
-    ESP_LOGV(TAG, "Light state: %s", gdo_light_state_str[light_state]);
+    ESP_LOGV(TAG, "Light state: %s", gdo_light_state_to_string(light_state));
   }
 }
 
@@ -2588,13 +2588,13 @@ inline static void update_lock_state(gdo_lock_state_t lock_state)
 {
   if (lock_state != g_status.lock)
   {
-    ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
+    ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_to_string(lock_state));
     g_status.lock = lock_state;
     send_event(GDO_CB_EVENT_LOCK);
   }
   else
   {
-    ESP_LOGV(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
+    ESP_LOGV(TAG, "Lock state: %s", gdo_lock_state_to_string(lock_state));
   }
 }
 
@@ -2608,7 +2608,7 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state)
 {
   if (obstruction_state != g_status.obstruction)
   {
-    ESP_LOGD(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
+    ESP_LOGD(TAG, "Obstruction state: %s", gdo_obstruction_state_to_string(obstruction_state));
     g_status.obstruction = obstruction_state;
     // This function can be called from obstruction timer... therefore...
     // We use queue event rather than send event to ensure that the callback
@@ -2617,7 +2617,7 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state)
   }
   else
   {
-    ESP_LOGV(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
+    ESP_LOGV(TAG, "Obstruction state: %s", gdo_obstruction_state_to_string(obstruction_state));
   }
 }
 
@@ -2631,7 +2631,7 @@ inline static void update_learn_state(gdo_learn_state_t learn_state)
 {
   if (learn_state != g_status.learn)
   {
-    ESP_LOGD(TAG, "Learn state: %s", gdo_learn_state_str[learn_state]);
+    ESP_LOGD(TAG, "Learn state: %s", gdo_learn_state_to_string(learn_state));
     g_status.learn = learn_state;
     send_event(GDO_CB_EVENT_LEARN);
     if (learn_state == GDO_LEARN_STATE_INACTIVE && g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
@@ -2641,7 +2641,7 @@ inline static void update_learn_state(gdo_learn_state_t learn_state)
   }
   else
   {
-    ESP_LOGV(TAG, "Learn state: %s", gdo_learn_state_str[learn_state]);
+    ESP_LOGV(TAG, "Learn state: %s", gdo_learn_state_to_string(learn_state));
   }
 }
 
@@ -2716,7 +2716,7 @@ inline static void handle_lock_action(gdo_lock_action_t lock_action)
  */
 inline static void update_motor_state(gdo_motor_state_t motor_state)
 {
-  ESP_LOGD(TAG, "Motor state: %s", gdo_motor_state_str[motor_state]);
+  ESP_LOGD(TAG, "Motor state: %s", gdo_motor_state_to_string(motor_state));
   if (motor_state != g_status.motor)
   {
     g_status.motor = motor_state;
@@ -2730,7 +2730,7 @@ inline static void update_motor_state(gdo_motor_state_t motor_state)
  */
 inline static void update_button_state(gdo_button_state_t button_state)
 {
-  ESP_LOGD(TAG, "Button state: %s", gdo_button_state_str[button_state]);
+  ESP_LOGD(TAG, "Button state: %s", gdo_button_state_to_string(button_state));
   if (button_state == GDO_BUTTON_STATE_RELEASED)
   {
     // Why are we calling get status with every button release?
@@ -2750,7 +2750,7 @@ inline static void update_button_state(gdo_button_state_t button_state)
  */
 inline static void update_motion_state(gdo_motion_state_t motion_state)
 {
-  ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_str[motion_state]);
+  ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_to_string(motion_state));
   if (motion_state == GDO_MOTION_STATE_DETECTED)
   {
     esp_timer_stop(motion_detect_timer);
@@ -2929,7 +2929,7 @@ inline static void update_paired_devices(gdo_paired_device_type_t type,
  */
 inline static void update_battery_state(gdo_battery_state_t battery_state)
 {
-  ESP_LOGD(TAG, "Battery state: %s", gdo_battery_state_str[battery_state]);
+  ESP_LOGD(TAG, "Battery state: %s", gdo_battery_state_to_string(battery_state));
   if (battery_state != g_status.battery)
   {
     g_status.battery = battery_state;
