@@ -2356,49 +2356,47 @@ static void gdo_main_task(void *arg)
 
 static void update_door_state(const gdo_door_state_t door_state)
 {
-  static int64_t start_opening;
-  static int64_t start_closing;
+  static int64_t start_opening = 0;
+  static int64_t start_closing = 0;
+  static int32_t open_counter = 0;
+  static int64_t open_average = 0;
+  static int32_t close_counter = 0;
+  static int64_t close_average = 0;
+#define AVERAGE_OVER 5 // the number of door open/close operations we will average over
 
-  if (!g_status.open_ms)
+  if (door_state == GDO_DOOR_STATE_OPENING && g_status.door == GDO_DOOR_STATE_CLOSED)
   {
-    if (door_state == GDO_DOOR_STATE_OPENING &&
-        g_status.door == GDO_DOOR_STATE_CLOSED)
-    {
-      start_opening = esp_timer_get_time();
-      ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
-    }
-    if (door_state == GDO_DOOR_STATE_OPEN &&
-        g_status.door == GDO_DOOR_STATE_OPENING && start_opening != 0)
-    {
-      g_status.open_ms = (uint16_t)((esp_timer_get_time() - start_opening) / 1000LL);
-      ESP_LOGD(TAG, "Open time: %u", g_status.open_ms);
-      send_event(GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT);
-    }
-    if (door_state == GDO_DOOR_STATE_STOPPED)
-    {
-      start_opening = -1;
-    }
+    start_opening = esp_timer_get_time();
+    ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
   }
-
-  if (!g_status.close_ms)
+  else if (door_state == GDO_DOOR_STATE_OPEN && g_status.door == GDO_DOOR_STATE_OPENING && start_opening > 0)
   {
-    if (door_state == GDO_DOOR_STATE_CLOSING &&
-        g_status.door == GDO_DOOR_STATE_OPEN)
-    {
-      start_closing = esp_timer_get_time();
-      ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
-    }
-    if (door_state == GDO_DOOR_STATE_CLOSED &&
-        g_status.door == GDO_DOOR_STATE_CLOSING && start_closing != 0)
-    {
-      g_status.close_ms = (uint16_t)((esp_timer_get_time() - start_closing) / 1000LL);
-      ESP_LOGD(TAG, "Close time: %u", g_status.close_ms);
-      send_event(GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT);
-    }
-    if (door_state == GDO_DOOR_STATE_STOPPED)
-    {
-      start_closing = -1;
-    }
+    int64_t open_duration = esp_timer_get_time() - start_opening;
+    open_counter++;
+    open_average += (open_duration - open_average) / (AVERAGE_OVER < open_counter) ? AVERAGE_OVER : open_counter;
+    g_status.open_ms = (uint16_t)(open_average / 1000LL);
+    ESP_LOGD(TAG, "Door open duration: %lldms, average: %ums", open_duration / 1000LL, g_status.open_ms);
+    send_event(GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT);
+  }
+  else if (door_state == GDO_DOOR_STATE_CLOSING && g_status.door == GDO_DOOR_STATE_OPEN)
+  {
+    start_closing = esp_timer_get_time();
+    ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
+  }
+  else if (door_state == GDO_DOOR_STATE_CLOSED && g_status.door == GDO_DOOR_STATE_CLOSING && start_closing > 0)
+  {
+    int64_t close_duration = esp_timer_get_time() - start_closing;
+    close_counter++;
+    close_average += (close_duration - close_average) / (AVERAGE_OVER < close_counter) ? AVERAGE_OVER : close_counter;
+    g_status.close_ms = (uint16_t)(close_average / 1000LL);
+    ESP_LOGD(TAG, "Door close duration: %lldms, average: %ums", close_duration / 1000LL, g_status.close_ms);
+    send_event(GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT);
+  }
+  else if (door_state == GDO_DOOR_STATE_STOPPED)
+  {
+    // If door is stopped (neither fully open or fully closed) then abort measuring duration
+    start_opening = 0;
+    start_closing = 0;
   }
 
   if (door_state == GDO_DOOR_STATE_OPENING || door_state == GDO_DOOR_STATE_CLOSING)
