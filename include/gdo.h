@@ -83,9 +83,9 @@ extern "C"
     typedef enum
     {
         GDO_BATT_STATE_UNKNOWN = 0,
-        GDO_BATT_STATE_CHARGING = 0x6,
-        GDO_BATT_STATE_FULL = 0x8,
-        GDO_BATT_STATE_MAX = 0xff,
+        GDO_BATT_STATE_CHARGING = 6,
+        GDO_BATT_STATE_FULL = 8,
+        GDO_BATT_STATE_MAX = 9,
     } gdo_battery_state_t;
 
     typedef enum

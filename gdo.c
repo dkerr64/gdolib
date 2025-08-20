@@ -1914,22 +1914,23 @@ static void decode_packet(uint8_t *packet)
 
   decode_wireline(packet, &rolling, &fixed, &data);
 
+  uint8_t parity = (data >> 12) & 0x0f;
   data &= ~0xf000;
 
   if ((fixed & 0xFFFFFFFF) == g_status.client_id)
   { // my commands
     ESP_LOGE(TAG,
              "received mine: rolling=%07" PRIx32 " fixed=%010" PRIx64
-             " data=%08" PRIx32,
-             rolling, fixed, data);
+             " data=%08" PRIx32 " parity=%01" PRIx8,
+             rolling, fixed, data, parity);
     return;
   }
   else
   {
     ESP_LOGI(TAG,
              "received rolling=%07" PRIx32 " fixed=%010" PRIx64
-             " data=%08" PRIx32,
-             rolling, fixed, data);
+             " data=%08" PRIx32 " parity=%01" PRIx8,
+             rolling, fixed, data, parity);
   }
 
   gdo_command_t cmd = ((fixed >> 24) & 0xf00) | (data & 0xff);
@@ -1937,8 +1938,8 @@ static void decode_packet(uint8_t *packet)
   uint8_t byte1 = (data >> 16) & 0xff;
   uint8_t byte2 = (data >> 24) & 0xff;
 
-  ESP_LOGI(TAG, "cmd=%03x (%s) byte2=%02x byte1=%02x nibble=%01x", cmd,
-           cmd_to_string(cmd), byte2, byte1, nibble);
+  ESP_LOGI(TAG, "cmd=%03x (%s) byte2=%02x byte1=%02x nibble=%01x parity=%01x", cmd,
+           cmd_to_string(cmd), byte2, byte1, nibble, parity);
 
   if (cmd == GDO_CMD_STATUS)
   {
@@ -1949,6 +1950,16 @@ static void decode_packet(uint8_t *packet)
     if (g_config.obst_from_status)
     {
       update_obstruction_state((gdo_obstruction_state_t)((byte1 >> 6) & 1));
+    }
+  }
+  else if (cmd == GDO_CMD_PAIR_3_RESP)
+  {
+    if (g_config.obst_from_status && (parity == 3 || parity == 4))
+    {
+      // Use Pair3Resp packets for obstruction detection via parity
+      // Parity 3 = clear, Parity 4 = obstructed
+      // or should it be byte1 9 = clear, byte1 14 = obstructed ??
+      update_obstruction_state((parity == 3) ? GDO_OBSTRUCTION_STATE_CLEAR : GDO_OBSTRUCTION_STATE_OBSTRUCTED);
     }
   }
   else if (cmd == GDO_CMD_LIGHT)
@@ -2136,10 +2147,10 @@ static void gdo_main_task(void *arg)
             // Filter out invalid bytes before processing to prevent mark/space bytes from being processed
             uint8_t filtered_buffer[RX_BUFFER_SIZE * 2];
             uint8_t filtered_index = 0;
-            
+
             for (uint8_t i = 0; i < rx_buf_index; i++)
             {
-              if (GDO_V1_CMD_IS_VALID(rx_buffer[i]) || (i > 0 && GDO_V1_CMD_IS_VALID(rx_buffer[i-1])))
+              if (GDO_V1_CMD_IS_VALID(rx_buffer[i]) || (i > 0 && GDO_V1_CMD_IS_VALID(rx_buffer[i - 1])))
               {
                 // Keep valid commands and their response bytes
                 filtered_buffer[filtered_index++] = rx_buffer[i];
@@ -2149,7 +2160,7 @@ static void gdo_main_task(void *arg)
                 ESP_LOGD(TAG, "Filtering out invalid/noise byte: 0x%02x", rx_buffer[i]);
               }
             }
-            
+
             // Process filtered buffer in pairs
             uint8_t pkt[2];
             for (uint8_t i = 0; i < filtered_index - 1; i += 2)
@@ -2159,7 +2170,7 @@ static void gdo_main_task(void *arg)
               print_buffer(g_status.protocol, pkt, false);
               decode_v1_packet(pkt);
             }
-            
+
             // Handle any remaining byte
             if (filtered_index % 2 != 0)
             {
@@ -2345,49 +2356,47 @@ static void gdo_main_task(void *arg)
 
 static void update_door_state(const gdo_door_state_t door_state)
 {
-  static int64_t start_opening;
-  static int64_t start_closing;
+  static int64_t start_opening = 0;
+  static int64_t start_closing = 0;
+  static int32_t open_counter = 0;
+  static int64_t open_average = 0;
+  static int32_t close_counter = 0;
+  static int64_t close_average = 0;
+#define AVERAGE_OVER 5 // the number of door open/close operations we will average over
 
-  if (!g_status.open_ms)
+  if (door_state == GDO_DOOR_STATE_OPENING && g_status.door == GDO_DOOR_STATE_CLOSED)
   {
-    if (door_state == GDO_DOOR_STATE_OPENING &&
-        g_status.door == GDO_DOOR_STATE_CLOSED)
-    {
-      start_opening = esp_timer_get_time();
-      ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
-    }
-    if (door_state == GDO_DOOR_STATE_OPEN &&
-        g_status.door == GDO_DOOR_STATE_OPENING && start_opening != 0)
-    {
-      g_status.open_ms = (uint16_t)((esp_timer_get_time() - start_opening) / 1000LL);
-      ESP_LOGD(TAG, "Open time: %u", g_status.open_ms);
-      send_event(GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT);
-    }
-    if (door_state == GDO_DOOR_STATE_STOPPED)
-    {
-      start_opening = -1;
-    }
+    start_opening = esp_timer_get_time();
+    ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
   }
-
-  if (!g_status.close_ms)
+  else if (door_state == GDO_DOOR_STATE_OPEN && g_status.door == GDO_DOOR_STATE_OPENING && start_opening > 0)
   {
-    if (door_state == GDO_DOOR_STATE_CLOSING &&
-        g_status.door == GDO_DOOR_STATE_OPEN)
-    {
-      start_closing = esp_timer_get_time();
-      ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
-    }
-    if (door_state == GDO_DOOR_STATE_CLOSED &&
-        g_status.door == GDO_DOOR_STATE_CLOSING && start_closing != 0)
-    {
-      g_status.close_ms = (uint16_t)((esp_timer_get_time() - start_closing) / 1000LL);
-      ESP_LOGD(TAG, "Close time: %u", g_status.close_ms);
-      send_event(GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT);
-    }
-    if (door_state == GDO_DOOR_STATE_STOPPED)
-    {
-      start_closing = -1;
-    }
+    int64_t open_duration = esp_timer_get_time() - start_opening;
+    open_counter++;
+    open_average += (open_duration - open_average) / (AVERAGE_OVER < open_counter) ? AVERAGE_OVER : open_counter;
+    g_status.open_ms = (uint16_t)(open_average / 1000LL);
+    ESP_LOGD(TAG, "Door open duration: %lldms, average: %ums", open_duration / 1000LL, g_status.open_ms);
+    send_event(GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT);
+  }
+  else if (door_state == GDO_DOOR_STATE_CLOSING && g_status.door == GDO_DOOR_STATE_OPEN)
+  {
+    start_closing = esp_timer_get_time();
+    ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
+  }
+  else if (door_state == GDO_DOOR_STATE_CLOSED && g_status.door == GDO_DOOR_STATE_CLOSING && start_closing > 0)
+  {
+    int64_t close_duration = esp_timer_get_time() - start_closing;
+    close_counter++;
+    close_average += (close_duration - close_average) / (AVERAGE_OVER < close_counter) ? AVERAGE_OVER : close_counter;
+    g_status.close_ms = (uint16_t)(close_average / 1000LL);
+    ESP_LOGD(TAG, "Door close duration: %lldms, average: %ums", close_duration / 1000LL, g_status.close_ms);
+    send_event(GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT);
+  }
+  else if (door_state == GDO_DOOR_STATE_STOPPED)
+  {
+    // If door is stopped (neither fully open or fully closed) then abort measuring duration
+    start_opening = 0;
+    start_closing = 0;
   }
 
   if (door_state == GDO_DOOR_STATE_OPENING || door_state == GDO_DOOR_STATE_CLOSING)
@@ -2448,7 +2457,7 @@ static void update_door_state(const gdo_door_state_t door_state)
   static int32_t previous_door_target = -1;
   if ((door_state != g_status.door) || (previous_door_position != g_status.door_position) || (previous_door_target != g_status.door_target))
   {
-    ESP_LOGD(TAG, "Door state: %s", gdo_door_state_str[door_state]);
+    ESP_LOGD(TAG, "Door state: %s", gdo_door_state_to_string(door_state));
     g_status.door = door_state;
     previous_door_position = g_status.door_position;
     previous_door_target = g_status.door_target;
@@ -2456,7 +2465,7 @@ static void update_door_state(const gdo_door_state_t door_state)
   }
   else
   {
-    ESP_LOGV(TAG, "Door state: %s", gdo_door_state_str[door_state]);
+    ESP_LOGV(TAG, "Door state: %s", gdo_door_state_to_string(door_state));
   }
 }
 
@@ -2559,13 +2568,13 @@ inline static void update_light_state(gdo_light_state_t light_state)
 {
   if (light_state != g_status.light)
   {
-    ESP_LOGD(TAG, "Light state: %s", gdo_light_state_str[light_state]);
+    ESP_LOGD(TAG, "Light state: %s", gdo_light_state_to_string(light_state));
     g_status.light = light_state;
     send_event(GDO_CB_EVENT_LIGHT);
   }
   else
   {
-    ESP_LOGV(TAG, "Light state: %s", gdo_light_state_str[light_state]);
+    ESP_LOGV(TAG, "Light state: %s", gdo_light_state_to_string(light_state));
   }
 }
 
@@ -2577,13 +2586,13 @@ inline static void update_lock_state(gdo_lock_state_t lock_state)
 {
   if (lock_state != g_status.lock)
   {
-    ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
+    ESP_LOGD(TAG, "Lock state: %s", gdo_lock_state_to_string(lock_state));
     g_status.lock = lock_state;
     send_event(GDO_CB_EVENT_LOCK);
   }
   else
   {
-    ESP_LOGV(TAG, "Lock state: %s", gdo_lock_state_str[lock_state]);
+    ESP_LOGV(TAG, "Lock state: %s", gdo_lock_state_to_string(lock_state));
   }
 }
 
@@ -2597,7 +2606,7 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state)
 {
   if (obstruction_state != g_status.obstruction)
   {
-    ESP_LOGD(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
+    ESP_LOGD(TAG, "Obstruction state: %s", gdo_obstruction_state_to_string(obstruction_state));
     g_status.obstruction = obstruction_state;
     // This function can be called from obstruction timer... therefore...
     // We use queue event rather than send event to ensure that the callback
@@ -2606,7 +2615,7 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state)
   }
   else
   {
-    ESP_LOGV(TAG, "Obstruction state: %s", gdo_obstruction_state_str[obstruction_state]);
+    ESP_LOGV(TAG, "Obstruction state: %s", gdo_obstruction_state_to_string(obstruction_state));
   }
 }
 
@@ -2618,15 +2627,19 @@ update_obstruction_state(gdo_obstruction_state_t obstruction_state)
  */
 inline static void update_learn_state(gdo_learn_state_t learn_state)
 {
-  ESP_LOGD(TAG, "Learn state: %s", gdo_learn_state_str[learn_state]);
   if (learn_state != g_status.learn)
   {
+    ESP_LOGD(TAG, "Learn state: %s", gdo_learn_state_to_string(learn_state));
     g_status.learn = learn_state;
     send_event(GDO_CB_EVENT_LEARN);
     if (learn_state == GDO_LEARN_STATE_INACTIVE && g_status.protocol == GDO_PROTOCOL_SEC_PLUS_V2)
     {
       get_paired_devices(GDO_PAIRED_DEVICE_TYPE_ALL);
     }
+  }
+  else
+  {
+    ESP_LOGV(TAG, "Learn state: %s", gdo_learn_state_to_string(learn_state));
   }
 }
 
@@ -2701,7 +2714,7 @@ inline static void handle_lock_action(gdo_lock_action_t lock_action)
  */
 inline static void update_motor_state(gdo_motor_state_t motor_state)
 {
-  ESP_LOGD(TAG, "Motor state: %s", gdo_motor_state_str[motor_state]);
+  ESP_LOGD(TAG, "Motor state: %s", gdo_motor_state_to_string(motor_state));
   if (motor_state != g_status.motor)
   {
     g_status.motor = motor_state;
@@ -2715,7 +2728,7 @@ inline static void update_motor_state(gdo_motor_state_t motor_state)
  */
 inline static void update_button_state(gdo_button_state_t button_state)
 {
-  ESP_LOGD(TAG, "Button state: %s", gdo_button_state_str[button_state]);
+  ESP_LOGD(TAG, "Button state: %s", gdo_button_state_to_string(button_state));
   if (button_state == GDO_BUTTON_STATE_RELEASED)
   {
     // Why are we calling get status with every button release?
@@ -2735,7 +2748,7 @@ inline static void update_button_state(gdo_button_state_t button_state)
  */
 inline static void update_motion_state(gdo_motion_state_t motion_state)
 {
-  ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_str[motion_state]);
+  ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_to_string(motion_state));
   if (motion_state == GDO_MOTION_STATE_DETECTED)
   {
     esp_timer_stop(motion_detect_timer);
@@ -2914,7 +2927,7 @@ inline static void update_paired_devices(gdo_paired_device_type_t type,
  */
 inline static void update_battery_state(gdo_battery_state_t battery_state)
 {
-  ESP_LOGD(TAG, "Battery state: %s", gdo_battery_state_str[battery_state]);
+  ESP_LOGD(TAG, "Battery state: %s", gdo_battery_state_to_string(battery_state));
   if (battery_state != g_status.battery)
   {
     g_status.battery = battery_state;
