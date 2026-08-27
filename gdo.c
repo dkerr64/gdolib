@@ -656,6 +656,11 @@ esp_err_t gdo_get_status(gdo_status_t *status)
   return ESP_OK;
 }
 
+esp_err_t gdo_get_firmware(void)
+{
+  return queue_command(GDO_CMD_GET_FIRMWARE, 0, 0, 0);
+}
+
 /**
  * @brief Trigger a request to get the current firmware of the GDO, only valid for security+v2 protocol.
  * @param void
