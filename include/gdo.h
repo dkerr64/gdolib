@@ -135,6 +135,7 @@ extern "C"
         GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT,
         GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT,
         GDO_CB_EVENT_TOF_TIMER,
+        GDO_CB_EVENT_FIRMWARE,
         GDO_CB_EVENT_MAX,
     } gdo_cb_event_t;
 
@@ -187,6 +188,8 @@ extern "C"
         uint32_t tof_timer_usecs;             // ToF interval timer microseconds use to triger TOF events
         uint32_t obst_test_pulse_timer_usecs; // Obstruction test pulse output pin timer microseconds
         uint16_t motion_timeout_ms;           // Motion detection timeout duration in milliseconds
+        uint8_t fw_major;                     // GDO firmware major version
+        uint8_t fw_minor;                     // GDO firmware minor version
     } gdo_status_t;
 
     typedef struct
@@ -247,6 +250,12 @@ extern "C"
      * @note This function is perfomred in a critical section and should be called with caution.
      */
     esp_err_t gdo_get_status(gdo_status_t *status);
+
+    /**
+     * @brief Requests the GDO firmware version; result delivered via GDO_CB_EVENT_FIRMWARE.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_get_firmware(void);
 
     /**
      * @brief Get the current obstruction pulse statistics.
