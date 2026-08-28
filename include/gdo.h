@@ -495,6 +495,12 @@ extern "C"
      */
     esp_err_t gdo_cancel_ttc(void);
 
+    /**
+     * @brief Toggle the time-to-close feature (Hold/Release TTC from wall panel).
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_toggle_ttc(void);
+
    /**
      * @brief Enable the time-to-close feature.
      * @return ESP_OK on success.

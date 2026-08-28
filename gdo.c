@@ -101,6 +101,7 @@ static gdo_status_t g_status = {
     .client_id = 0,
     .toggle_only = false,
     .obst_override = false,
+    .obst_from_status = false,
     .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
     .tof_timer_active = false,
     .tof_timer_usecs = 250000,
