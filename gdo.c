@@ -2021,16 +2021,19 @@ static void decode_packet(uint8_t *packet)
   }
   else if (cmd == GDO_CMD_UPDATE_TTC)
   {
-    update_ttc((byte1 << 8) | byte2);
+    g_status.ttc_countdown = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_UPDATE_TTC);
   }
   else if (cmd == GDO_CMD_PAIR_2_RESP && nibble == 0x1)
   {
-    update_ttc((byte1 << 8) | byte2);
+    g_status.ttc_countdown = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_UPDATE_TTC);
   }
   else if (cmd == GDO_CMD_SET_TTC)
   {
+    g_status.ttc_state = GDO_TTC_STATE_NORMAL;
+    g_status.ttc_countdown = (byte1 << 8) | byte2;
+    g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
   }
   else if (cmd == GDO_CMD_CANCEL_TTC)
@@ -2899,9 +2902,9 @@ inline static void update_openings(uint8_t flag, uint16_t count)
 inline static void update_ttc(uint16_t ttc)
 {
   ESP_LOGI(TAG, "TTC Seconds remaining: %u", ttc);
-  if (g_status.ttc_seconds != ttc)
+  if (g_status.ttc_countdown != ttc)
   {
-    g_status.ttc_seconds = ttc;
+    g_status.ttc_countdown = ttc;
   }
 }
 
@@ -2936,7 +2939,7 @@ esp_err_t gdo_cancel_ttc(void)
   return err;
 }
 
-esp_err_t gdo_toggle_ttc(void)
+esp_err_t gdo_enable_ttc(void)
 {
   esp_err_t err = ESP_OK;
   uint8_t byte1 = 0x04;
@@ -2945,6 +2948,17 @@ esp_err_t gdo_toggle_ttc(void)
   queue_command(GDO_CMD_CANCEL_TTC, nibble, byte1, byte2);
   queue_event((gdo_event_t){GDO_EVENT_CANCEL_TTC});
   return err;
+}
+
+esp_err_t gdo_send_command(uint16_t command, uint8_t nibble,
+                           uint8_t byte1, uint8_t byte2)
+{
+  if (command > 0x0fff || nibble > 0x0f)
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  return queue_command((gdo_command_t)command, nibble, byte1, byte2);
 }
 
 /**
