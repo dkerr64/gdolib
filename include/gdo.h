@@ -187,6 +187,7 @@ extern "C"
         bool obst_test_pulse_timer_active;    // Obstruction test pulse output pin timer active
         uint16_t openings;                    // Number of openings
         uint16_t ttc_seconds;                 // Time to close in seconds
+        uint16_t ttc_countdown;               // Time door takes to close from fully open in milliseconds (override)
         uint16_t open_ms;                     // Time door takes to open from fully closed in milliseconds
         uint16_t close_ms;                    // Time door takes to close from fully open in milliseconds
         uint16_t vehicle_parked_threshold;    // Distance thats considered a parked state
@@ -490,7 +491,20 @@ extern "C"
      * @brief Toggle the time-to-close feature (Hold/Release TTC from wall panel).
      * @return ESP_OK on success.
      */
-    esp_err_t gdo_toggle_ttc(void);
+    esp_err_t gdo_enable_ttc(void);
+
+    /**
+     * @brief Encodes and queues a raw Security+ V2 command.
+     * @param command The command ID.
+     * @param nibble The command nibble, from 0x0 to 0xf.
+     * @param byte1 The first command byte.
+     * @param byte2 The second command byte.
+     * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid input,
+     * ESP_ERR_INVALID_STATE if the driver is not initialized, ESP_ERR_NO_MEM
+     * if the transmit queue is full, or ESP_FAIL if encoding fails.
+     */
+    esp_err_t gdo_send_command(uint16_t command, uint8_t nibble,
+                               uint8_t byte1, uint8_t byte2);
 
     /**
      * @brief Sets the time the door takes to open from fully closed in milliseconds.
