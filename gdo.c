@@ -138,6 +138,21 @@ const static uint32_t OBST_CHECK_PERIOD = 250; // Milliseconds between checks fo
 // Variables to track obstruction pulse statistics
 static volatile uint32_t obst_pulses = 0;
 
+#define DOOR_MAX_HISTORY 6               // Number of door operations to calculate median across
+#define DOOR_MAX_DURATION_MS (65 * 1000) // Maximum time it should take to open/close a door
+#define DOOR_MIN_DURATION_MS (3 * 1000)  // Minimum time it should take to open/close a door
+typedef struct
+{
+  uint32_t max;
+  uint32_t count;
+  uint32_t duration[DOOR_MAX_HISTORY];
+} DoorHistory;
+static DoorHistory openHistory = {DOOR_MAX_HISTORY, 0, {0}};
+static DoorHistory closeHistory = {DOOR_MAX_HISTORY, 0, {0}};
+#define openHistory(n) (openHistory.duration[(openHistory.count + DOOR_MAX_HISTORY - (n)) % DOOR_MAX_HISTORY])
+#define closeHistory(n) (closeHistory.duration[(closeHistory.count + DOOR_MAX_HISTORY - (n)) % DOOR_MAX_HISTORY])
+
+
 /******************************* PUBLIC API FUNCTIONS **********************************/
 
 /**
@@ -1190,34 +1205,41 @@ esp_err_t gdo_set_protocol(gdo_protocol_type_t protocol)
 }
 
 /**
- * @brief Sets the time the door takes to open from fully closed in
- * milliseconds.
+ * @brief Sets the time the door takes to open from fully closed in milliseconds.
+ * If set to zero then recalibration will be triggered.
  * @param ms The time the door takes to open from fully closed in milliseconds.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the ms is invalid.
  */
 esp_err_t gdo_set_open_duration(uint16_t ms)
 {
-  if (ms < 1000 || ms > 65000)
+  if (ms > 0 && (ms < DOOR_MIN_DURATION_MS || ms > DOOR_MAX_DURATION_MS))
   {
     return ESP_ERR_INVALID_ARG;
   }
-
+  ESP_LOGD(TAG, "Setting open duration to %lums", ms);
+  // Initialize the open history with the new duration, which may be zero.
+  openHistory = (DoorHistory){DOOR_MAX_HISTORY, (ms == 0) ? 0 : 1, {0}};
+  openHistory.duration[0] = ms;
   g_status.open_ms = ms;
   return ESP_OK;
 }
 
 /**
  * @brief Sets the time the door takes to close from fully open in milliseconds.
+ * If set to zero then recalibration will be triggered.
  * @param ms The time the door takes to close from fully open in milliseconds.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the ms is invalid.
  */
 esp_err_t gdo_set_close_duration(uint16_t ms)
 {
-  if (ms < 1000 || ms > 65000)
+  if (ms > 0 && (ms < DOOR_MIN_DURATION_MS || ms > DOOR_MAX_DURATION_MS))
   {
     return ESP_ERR_INVALID_ARG;
   }
-
+  ESP_LOGD(TAG, "Setting close duration to %lums", ms);
+  // Initialize the close history with the new duration, which may be zero.
+  closeHistory = (DoorHistory){DOOR_MAX_HISTORY, (ms == 0) ? 0 : 1, {0}};
+  closeHistory.duration[0] = ms;
   g_status.close_ms = ms;
   return ESP_OK;
 }
@@ -2379,50 +2401,112 @@ static void gdo_main_task(void *arg)
 }
 
 /*************************** STATUS FUNCTIONS ************************************/
+// For door open/close duration
+uint32_t doorMedian(const uint32_t *arr, uint32_t n)
+{
+  static uint32_t cpy[DOOR_MAX_HISTORY];
+  if (n == 0 || n > DOOR_MAX_HISTORY)
+  {
+    return 0;
+  }
+  else if (n == 1)
+  {
+    return arr[0];
+  }
+  else if (n == 2)
+  {
+    return (arr[0] + arr[1]) / 2;
+  }
+  else
+  {
+    // Insertion sort
+    for (uint32_t i = 0; i < n; i++)
+    {
+      int32_t j = i - 1;
+      while (j >= 0 && cpy[j] > arr[i])
+      {
+        cpy[j + 1] = cpy[j];
+        j--;
+      }
+      cpy[j + 1] = arr[i];
+    }
+    // return median in the array
+    if (n % 2 == 1)
+    {
+      // odd size array
+      return cpy[n / 2];
+    }
+    else
+    {
+      // even size array
+      return (cpy[(n / 2) - 1] + cpy[n / 2]) / 2;
+    }
+  }
+}
 
 static void update_door_state(const gdo_door_state_t door_state)
 {
-  static int64_t start_opening = 0;
-  static int64_t start_closing = 0;
-  static int32_t open_counter = 0;
-  static int64_t open_average = 0;
-  static int32_t close_counter = 0;
-  static int64_t close_average = 0;
-#define AVERAGE_OVER 5 // the number of door open/close operations we will average over
+  static uint32_t start_opening = 0;
+  static uint32_t start_closing = 0;
 
   if (door_state == GDO_DOOR_STATE_OPENING && g_status.door == GDO_DOOR_STATE_CLOSED)
   {
-    start_opening = esp_timer_get_time();
-    ESP_LOGD(TAG, "Record start time of door opening: %lld", start_opening / 1000LL);
+    // convert from microseconds to milliseconds for all calculations
+    start_opening = (uint32_t)(esp_timer_get_time() / 1000LL);
+    ESP_LOGD(TAG, "Record start time of door opening: %lums", start_opening);
   }
   else if (door_state == GDO_DOOR_STATE_OPEN && g_status.door == GDO_DOOR_STATE_OPENING && start_opening > 0)
   {
-    int64_t open_duration = esp_timer_get_time() - start_opening;
-    open_counter++;
-    open_average += (open_duration - open_average) / ((AVERAGE_OVER < open_counter) ? AVERAGE_OVER : open_counter);
-    g_status.open_ms = (uint16_t)(open_average / 1000LL);
-    ESP_LOGD(TAG, "Door open duration: %lldms, average: %ums", open_duration / 1000LL, g_status.open_ms);
-    queue_event((gdo_event_t){GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT});
+    // convert from microseconds to milliseconds for all calculations
+    uint32_t open_duration = (uint32_t)(esp_timer_get_time() / 1000LL) - start_opening;
+    if (DOOR_MIN_DURATION_MS <= open_duration && open_duration <= DOOR_MAX_DURATION_MS)
+    {
+      openHistory.duration[openHistory.count++ % DOOR_MAX_HISTORY] = open_duration;
+      uint32_t open_median = doorMedian(openHistory.duration, MIN(openHistory.count, DOOR_MAX_HISTORY));
+      g_status.open_ms = (uint16_t)(open_median / 1000);
+      ESP_LOGD(TAG, "Door open duration: %lums, History: %lums, %lums, %lums, %lums, %lums; Median: %lums",
+               open_duration, openHistory(2), openHistory(3), openHistory(4), openHistory(5), openHistory(6), g_status.open_ms);
+      queue_event((gdo_event_t){GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT});
+    }
+    else
+    {
+      start_opening = 0;
+      ESP_LOGW(TAG, "Ignoring implausibly short or long open duration: %lums", open_duration);
+    }
   }
   else if (door_state == GDO_DOOR_STATE_CLOSING && g_status.door == GDO_DOOR_STATE_OPEN)
   {
-    start_closing = esp_timer_get_time();
-    ESP_LOGD(TAG, "Record start time of door closing: %lld", start_closing / 1000LL);
+    // convert from microseconds to milliseconds for all calculations
+    start_closing =(uint32_t)(esp_timer_get_time() / 1000LL);
+    ESP_LOGD(TAG, "Record start time of door closing: %lums", start_closing);
   }
   else if (door_state == GDO_DOOR_STATE_CLOSED && g_status.door == GDO_DOOR_STATE_CLOSING && start_closing > 0)
   {
-    int64_t close_duration = esp_timer_get_time() - start_closing;
-    close_counter++;
-    close_average += (close_duration - close_average) / ((AVERAGE_OVER < close_counter) ? AVERAGE_OVER : close_counter);
-    g_status.close_ms = (uint16_t)(close_average / 1000LL);
-    ESP_LOGD(TAG, "Door close duration: %lldms, average: %ums", close_duration / 1000LL, g_status.close_ms);
-    queue_event((gdo_event_t){GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT});
+    // convert from microseconds to milliseconds for all calculations
+    uint32_t close_duration = (uint32_t)(esp_timer_get_time() / 1000LL) - start_closing;
+    if (DOOR_MIN_DURATION_MS <= close_duration && close_duration <= DOOR_MAX_DURATION_MS)
+    {
+      closeHistory.duration[closeHistory.count++ % DOOR_MAX_HISTORY] = close_duration;
+      uint32_t close_median = doorMedian(closeHistory.duration, MIN(closeHistory.count, DOOR_MAX_HISTORY));
+      g_status.close_ms = (uint16_t)(close_median / 1000);
+      ESP_LOGD(TAG, "Door close duration: %lums, History: %lums, %lums, %lums, %lums, %lums; Median: %lums",
+               close_duration, closeHistory(2), closeHistory(3), closeHistory(4), closeHistory(5), closeHistory(6), g_status.close_ms);
+      queue_event((gdo_event_t){GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT});
+    }
+    else
+    {
+      start_closing = 0;
+      ESP_LOGW(TAG, "Ignoring implausibly short or long close duration: %lums", close_duration);
+    }
   }
-  else if (door_state == GDO_DOOR_STATE_STOPPED)
+  else if ((door_state == GDO_DOOR_STATE_STOPPED && (start_opening > 0 || start_closing > 0)) ||
+           (door_state == GDO_DOOR_STATE_OPENING && g_status.door == GDO_DOOR_STATE_CLOSING) ||
+           (door_state == GDO_DOOR_STATE_CLOSING && g_status.door == GDO_DOOR_STATE_OPENING))
   {
     // If door is stopped (neither fully open or fully closed) then abort measuring duration
     start_opening = 0;
     start_closing = 0;
+    ESP_LOGD(TAG, "Aborting door open/close duration calculation");
   }
 
   if (door_state == GDO_DOOR_STATE_OPENING || door_state == GDO_DOOR_STATE_CLOSING)
