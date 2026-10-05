@@ -125,7 +125,7 @@ static esp_timer_handle_t v1_status_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = GDO_MIN_COMMAND_INTERVAL_MS;
 //static uint32_t g_ttc_delay_s = 0;
-static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
+//static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
 static gdo_obstruction_stats_t obst_stats = {
     .count = 0,
@@ -653,9 +653,9 @@ esp_err_t gdo_get_status(gdo_status_t *status)
   {
     return ESP_ERR_INVALID_ARG;
   }
-  portENTER_CRITICAL(&gdo_spinlock);
+  //portENTER_CRITICAL(&gdo_spinlock);
   *status = g_status;
-  portEXIT_CRITICAL(&gdo_spinlock);
+  //portEXIT_CRITICAL(&gdo_spinlock);
   return ESP_OK;
 }
 
@@ -675,7 +675,7 @@ esp_err_t gdo_get_obstruction_pulse_stats(gdo_obstruction_pulse_stats_t *stats, 
 
   uint64_t current_time = esp_timer_get_time();
 
-  portENTER_CRITICAL(&gdo_spinlock);
+  portENTER_CRITICAL(obst_stats.mux);
   stats->pulses = obst_pulses;
   stats->current_pulse_count = obst_stats.count;
   stats->last_pulse_time_us = obst_stats.last_pulse_micros;
@@ -687,7 +687,7 @@ esp_err_t gdo_get_obstruction_pulse_stats(gdo_obstruction_pulse_stats_t *stats, 
     obst_stats.last_pulse_micros = 0;
   }
 
-  portEXIT_CRITICAL(&gdo_spinlock);
+  portEXIT_CRITICAL(obst_stats.mux);
 
   // Calculate time since last pulse in milliseconds
   if (stats->last_pulse_time_us > 0)
