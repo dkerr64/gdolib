@@ -105,6 +105,7 @@ static gdo_status_t g_status = {
     .obst_test_pulse_timer_usecs = 50000,
     .vehicle_parked_threshold = 100,
     .vehicle_parked_threshold_variance = 5,
+    .motion_timeout_ms = GDO_MOTION_TIMEOUT_MS,
 };
 
 static bool g_protocol_forced;
@@ -493,6 +494,7 @@ esp_err_t gdo_deinit(void)
   g_status.close_ms = 0;
   g_status.door_position = -1;
   g_status.door_target = -1;
+  g_status.motion_timeout_ms = GDO_MOTION_TIMEOUT_MS;
 
   err = gpio_reset_pin(g_config.uart_tx_pin);
   if (err != ESP_OK)
@@ -2779,7 +2781,9 @@ inline static void update_motion_state(gdo_motion_state_t motion_state)
   ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_to_string(motion_state));
   if (motion_state == GDO_MOTION_STATE_DETECTED)
   {
-    esp_timer_start_once(motion_detect_timer, 3000 * 1000);
+    // We can ignore return values, stop will return ESP_ERR_INVALID_STATE if not running, but that's fine.
+    esp_timer_stop(motion_detect_timer);
+    esp_timer_start_once(motion_detect_timer, g_status.motion_timeout_ms * 1000);
   }
 
   if (g_status.motion != motion_state)
@@ -2796,6 +2800,32 @@ inline static void update_motion_state(gdo_motion_state_t motion_state)
       get_status();
     }
   }
+}
+
+/**
+ * @brief Set the motion detection timeout duration
+ * @param ms The new motion detection timeout duration in milliseconds
+ * @return ESP_OK on success
+ */
+esp_err_t gdo_set_motion_timeout(uint16_t ms)
+{
+  g_status.motion_timeout_ms = ms;
+  return ESP_OK;
+}
+
+/**
+ * @brief Get the motion detection timeout duration
+ * @param ms Pointer to store the current motion detection timeout duration in milliseconds
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if ms is NULL
+ */
+esp_err_t gdo_get_motion_timeout(uint16_t *ms)
+{
+  if (ms == NULL)
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+  *ms = g_status.motion_timeout_ms;
+  return ESP_OK;
 }
 
 /**

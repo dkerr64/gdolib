@@ -186,6 +186,7 @@ extern "C"
         uint32_t rolling_code;                // Rolling code
         uint32_t tof_timer_usecs;             // ToF interval timer microseconds use to triger TOF events
         uint32_t obst_test_pulse_timer_usecs; // Obstruction test pulse output pin timer microseconds
+        uint16_t motion_timeout_ms;           // Motion detection timeout duration in milliseconds
     } gdo_status_t;
 
     typedef struct
@@ -530,6 +531,20 @@ extern "C"
      * @param vehicle_parked_threshold_variance within this variance the state will be stable
      */
     esp_err_t gdo_set_vehicle_parked_threshold_variance(uint16_t vehicle_parked_threshold_variance);
+
+    /**
+     * @brief Set the motion detection timeout duration
+     * @param ms The new motion detection timeout duration in milliseconds
+     * @return ESP_OK on success
+     */
+    esp_err_t gdo_set_motion_timeout(uint16_t ms);
+
+    /**
+     * @brief Get the motion detection timeout duration
+     * @param ms Pointer to store the current motion detection timeout duration in milliseconds
+     * @return ESP_OK on success, ESP_ERR_INVALID_ARG if ms is NULL
+     */
+    esp_err_t gdo_get_motion_timeout(uint16_t *ms);
 
 #ifdef __cplusplus
 }
