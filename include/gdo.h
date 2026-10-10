@@ -97,8 +97,8 @@ extern "C"
 
     typedef enum
     {
-        GDO_TTC_STATE_NORMAL = 0,
-        GDO_TTC_STATE_HOLD,
+        GDO_TTC_STATE_ACTIVE = 0,
+        GDO_TTC_STATE_INACTIVE,
         GDO_TTC_STATE_MAX,
     } gdo_ttc_state_t;
 
@@ -177,7 +177,7 @@ extern "C"
         gdo_button_state_t button;            // Button state
         gdo_battery_state_t battery;          // Battery state
         gdo_learn_state_t learn;              // Learn state
-        gdo_ttc_state_t ttc_state;            // TTC hold/normal state
+        gdo_ttc_state_t ttc;                  // TTC active/inactive state
         gdo_paired_device_t paired_devices;   // Paired devices
         gdo_door_state_t last_move_direction; // Last move direction
         bool synced;                          // Synced state
@@ -196,7 +196,7 @@ extern "C"
         int32_t door_target;                  // Door target position in percentage (0-10000) [OPEN-CLOSED]
         uint32_t client_id;                   // Client ID
         uint32_t rolling_code;                // Rolling code
-        uint32_t tof_timer_usecs;             // ToF interval timer microseconds use to triger TOF events
+        uint32_t tof_timer_usecs;             // ToF interval timer microseconds used to triger TOF events
         uint32_t obst_test_pulse_timer_usecs; // Obstruction test pulse output pin timer microseconds
         uint8_t fw_major;                     // GDO firmware major version
         uint8_t fw_minor;                     // GDO firmware minor version
