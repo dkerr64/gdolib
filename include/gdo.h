@@ -97,8 +97,9 @@ extern "C"
 
     typedef enum
     {
-        GDO_TTC_STATE_ACTIVE = 0,
-        GDO_TTC_STATE_INACTIVE,
+        GDO_TTC_STATE_REL = 0,
+        GDO_TTC_STATE_HOLD,
+        GDO_TTC_STATE_OFF,
         GDO_TTC_STATE_MAX,
     } gdo_ttc_state_t;
 
@@ -137,8 +138,8 @@ extern "C"
         GDO_CB_EVENT_MOTION,
         GDO_CB_EVENT_SET_TTC,
         GDO_CB_EVENT_CANCEL_TTC,
-        GDO_CB_EVENT_TTC_HOLD,
-        GDO_CB_EVENT_TTC_RELEASED,
+        GDO_CB_EVENT_HOLD_TTC,
+        GDO_CB_EVENT_REL_TTC,
         GDO_CB_EVENT_UPDATE_TTC,
         GDO_CB_EVENT_PAIRED_DEVICES,
         GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT,
@@ -177,7 +178,7 @@ extern "C"
         gdo_button_state_t button;            // Button state
         gdo_battery_state_t battery;          // Battery state
         gdo_learn_state_t learn;              // Learn state
-        gdo_ttc_state_t ttc;                  // TTC active/inactive state
+        gdo_ttc_state_t ttc_state;            // TTC state
         gdo_paired_device_t paired_devices;   // Paired devices
         gdo_door_state_t last_move_direction; // Last move direction
         bool synced;                          // Synced state

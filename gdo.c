@@ -91,7 +91,7 @@ static gdo_status_t g_status = {
     .synced = false,
     .openings = 0,
     .ttc_seconds = 0,
-    .ttc_state = GDO_TTC_STATE_NORMAL,
+    .ttc_state = GDO_TTC_STATE_OFF,
     .open_ms = 0,
     .close_ms = 0,
     .door_position = -1,
@@ -491,7 +491,7 @@ esp_err_t gdo_deinit(void)
   g_status.paired_devices.total_all = GDO_PAIRED_DEVICE_COUNT_UNKNOWN;
   g_status.openings = 0;
   g_status.ttc_seconds = 0;
-  g_status.ttc_state = GDO_TTC_STATE_NORMAL;
+  g_status.ttc_state = GDO_TTC_STATE_OFF;
   g_status.fw_major = 0;
   g_status.fw_minor = 0;
   g_status.open_ms = 0;
@@ -2026,7 +2026,7 @@ static void decode_packet(uint8_t *packet)
   }
   else if (cmd == GDO_CMD_SET_TTC)
   {
-    g_status.ttc_state = GDO_TTC_STATE_NORMAL;
+    g_status.ttc_state = GDO_TTC_STATE_OFF;
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
@@ -2040,12 +2040,12 @@ static void decode_packet(uint8_t *packet)
     if (byte1 == 0x0A)
     {
       g_status.ttc_state = GDO_TTC_STATE_HOLD;
-      send_event(GDO_CB_EVENT_TTC_HOLD);
+      send_event(GDO_CB_EVENT_HOLD_TTC);
     }
     else if (byte1 == 0x0C)
     {
-      g_status.ttc_state = GDO_TTC_STATE_NORMAL;
-      send_event(GDO_CB_EVENT_TTC_RELEASED);
+      g_status.ttc_state = GDO_TTC_STATE_REL;
+      send_event(GDO_CB_EVENT_REL_TTC);
     }
   }
   else if (cmd == GDO_CMD_PAIRED_DEVICES)
