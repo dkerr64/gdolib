@@ -182,7 +182,7 @@ extern "C"
         gdo_button_state_t button;            // Button state
         gdo_battery_state_t battery;          // Battery state
         gdo_learn_state_t learn;              // Learn state
-        gdo_ttc_state_t ttc;                  // TTC active/inactive state
+        gdo_ttc_state_t ttc_state;            // TTC state
         gdo_paired_device_t paired_devices;   // Paired devices
         gdo_door_state_t last_move_direction; // Last move direction
         bool synced;                          // Synced state
