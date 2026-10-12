@@ -647,9 +647,24 @@ esp_err_t gdo_get_status(gdo_status_t *status)
   return ESP_OK;
 }
 
+/**
+ * @brief Trigger a request to get the current firmware of the GDO, only valid for security+v2 protocol.
+ * @param void
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if on fail.
+ */
 esp_err_t gdo_get_firmware(void)
 {
   return queue_command(GDO_CMD_GET_FIRMWARE, 0, 0, 0);
+}
+
+/**
+ * @brief Trigger a request to get the TTC state settings, only valid for security+v2 protocol.
+ * @param void
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if on fail.
+ */
+esp_err_t gdo_get_ttc_state(void)
+{
+  return queue_command(GDO_CMD_GET_TTC_STATE, 0, 0xA0, 0);
 }
 
 /**
@@ -2026,16 +2041,16 @@ static void decode_packet(uint8_t *packet)
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_UPDATE_TTC);
   }
-  else if (cmd == GDO_CMD_SET_TTC)
+  else if (cmd == GDO_CMD_CANCEL_TTC)
   {
     g_status.ttc_state = GDO_TTC_STATE_OFF;
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
   }
-  else if (cmd == GDO_CMD_CANCEL_TTC)
+  else if (cmd == GDO_CMD_TTC)
   {
-    send_event(GDO_CB_EVENT_CANCEL_TTC);
+    send_event(GDO_CB_EVENT_TTC);
   }
   else if (cmd == GDO_CMD_PAIR_3_RESP)
   {
@@ -2931,7 +2946,7 @@ esp_err_t gdo_cancel_ttc(void)
   uint8_t byte1 = 0x05;
   uint8_t byte2 = 0x00;
   uint8_t nibble = 1;
-  queue_command(GDO_CMD_CANCEL_TTC, nibble, byte1, byte2);
+  queue_command(GDO_CMD_TTC, nibble, byte1, byte2);
   queue_event((gdo_event_t){GDO_EVENT_CANCEL_TTC});
   return err;
 }
@@ -2942,8 +2957,8 @@ esp_err_t gdo_enable_ttc(void)
   uint8_t byte1 = 0x04;
   uint8_t byte2 = 0x00;
   uint8_t nibble = 1;
-  queue_command(GDO_CMD_CANCEL_TTC, nibble, byte1, byte2);
-  queue_event((gdo_event_t){GDO_EVENT_CANCEL_TTC});
+  queue_command(GDO_CMD_TTC, nibble, byte1, byte2);
+  queue_event((gdo_event_t){GDO_EVENT_ENABLE_TTC});
   return err;
 }
 
