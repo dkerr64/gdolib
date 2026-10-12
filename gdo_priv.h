@@ -81,6 +81,7 @@ extern "C"
         GDO_CMD_PAIR_2 = 0x400,
         GDO_CMD_PAIR_2_RESP = 0x401,
         GDO_CMD_SET_TTC = 0x402,
+        GDO_CMD_TTC = 0x408,
         GDO_CMD_CANCEL_TTC = 0x408,
         GDO_CMD_GET_TTC = 0x409,
         GDO_CMD_UPDATE_TTC = 0x40A,

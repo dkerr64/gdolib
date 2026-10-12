@@ -657,6 +657,11 @@ esp_err_t gdo_get_status(gdo_status_t *status)
   return ESP_OK;
 }
 
+/**
+ * @brief Trigger a request to get the current firmware of the GDO, only valid for security+v2 protocol.
+ * @param void
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if on fail.
+ */
 esp_err_t gdo_get_firmware(void)
 {
   return queue_command(GDO_CMD_GET_FIRMWARE, 0, 0, 0);
@@ -2095,15 +2100,15 @@ static void decode_packet(uint8_t *packet)
       }
     }
   }
-  else if (cmd == GDO_CMD_SET_TTC)
+  else if (cmd == GDO_CMD_CANCEL_TTC)
   {
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
   }
-  else if (cmd == GDO_CMD_CANCEL_TTC)
+  else if (cmd == GDO_CMD_TTC)
   {
-    send_event(GDO_CB_EVENT_CANCEL_TTC);
+    send_event(GDO_CB_EVENT_TTC);
   }
   else if (cmd == GDO_CMD_PAIR_3_RESP)
   {

@@ -186,8 +186,10 @@ const char *cmd_to_string(gdo_command_t cmd)
         return "PAIR_2_RESP";
     case GDO_CMD_UPDATE_TTC:
         return "UPDATE_TTC";
-    case GDO_CMD_CANCEL_TTC:
-        return "CANCEL_TTC";
+    //case GDO_CMD_CANCEL_TTC:
+    //    return "CANCEL_TTC";
+    case GDO_CMD_TTC:
+        return "TTC";
     case GDO_CMD_GET_TTC:
         return "GET_TTC";
     case GDO_CMD_SET_TTC:

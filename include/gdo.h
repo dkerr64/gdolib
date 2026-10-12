@@ -495,11 +495,29 @@ extern "C"
      */
     esp_err_t gdo_cancel_ttc(void);
 
+   /**
+     * @brief Enable the time-to-close feature.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_enable_ttc(void);
+
+    /**
+     * @brief Issues a request to get the current TTC state.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_get_ttc_state(void);
+
     /**
      * @brief Toggle the time-to-close feature (Hold/Release TTC from wall panel).
      * @return ESP_OK on success.
      */
-    esp_err_t gdo_enable_ttc(void);
+    esp_err_t gdo_hold_ttc(void);
+
+    /**
+     * @brief Toggle the time-to-close feature (Hold/Release TTC from wall panel).
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_release_ttc(void);
 
     /**
      * @brief Encodes and queues a raw Security+ V2 command.
