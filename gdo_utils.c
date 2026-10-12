@@ -166,6 +166,8 @@ const char *cmd_to_string(gdo_command_t cmd)
         return "MOTOR_ON";
     case GDO_CMD_MOTION:
         return "MOTION";
+    case GDO_CMD_SET_AUTO_LIGHT_MODE:
+        return "SET_AUTO_LIGHT_MODE";
     case GDO_CMD_GET_PAIRED_DEVICES:
         return "GET_PAIRED_DEVICES";
     case GDO_CMD_PAIRED_DEVICES:
@@ -184,10 +186,8 @@ const char *cmd_to_string(gdo_command_t cmd)
         return "PAIR_2_RESP";
     case GDO_CMD_UPDATE_TTC:
         return "UPDATE_TTC";
-    //case GDO_CMD_CANCEL_TTC:
-    //    return "CANCEL_TTC";
-    case GDO_CMD_TTC:
-        return "TTC";
+    case GDO_CMD_CANCEL_TTC:
+        return "CANCEL_TTC";
     case GDO_CMD_GET_TTC:
         return "GET_TTC";
     case GDO_CMD_SET_TTC:
