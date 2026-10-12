@@ -97,9 +97,11 @@ extern "C"
 
     typedef enum
     {
-        GDO_TTC_STATE_REL = 0,
-        GDO_TTC_STATE_HOLD,
-        GDO_TTC_STATE_OFF,
+        GDO_TTC_STATE_OFF = 0,         // 0x09 - disabled via CANCEL_TTC
+        GDO_TTC_STATE_REL = 1,         // 0x0A - released (countdown available)
+        GDO_TTC_STATE_COUNTDOWN = 2,   // 0x0B - countdown running
+        GDO_TTC_STATE_HOLD = 3,        // 0x0C - held (door waiting to close)
+        GDO_TTC_STATE_ERROR = 4,       // 0x0E - error state (post-power-cycle)
         GDO_TTC_STATE_MAX,
     } gdo_ttc_state_t;
 
@@ -147,6 +149,7 @@ extern "C"
         GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT,
         GDO_CB_EVENT_TOF_TIMER,
         GDO_CB_EVENT_FIRMWARE,
+        GDO_CB_EVENT_AUTO_LIGHT_MODE,
         GDO_CB_EVENT_MAX,
     } gdo_cb_event_t;
 
@@ -187,9 +190,11 @@ extern "C"
         bool obst_override;                   // Used when the door opener has no obstruction sensors.
         bool tof_timer_active;                // ToF interval timer active
         bool obst_test_pulse_timer_active;    // Obstruction test pulse output pin timer active
+        bool auto_light_enabled;              // Motion-sensor auto-light control enabled
         uint16_t openings;                    // Number of openings
         uint16_t ttc_seconds;                 // Time to close in seconds
         uint16_t ttc_countdown;               // Time door takes to close from fully open in milliseconds (override)
+        uint16_t light_timer_seconds;         // Light timer duration in seconds
         uint16_t open_ms;                     // Time door takes to open from fully closed in milliseconds
         uint16_t close_ms;                    // Time door takes to close from fully open in milliseconds
         uint16_t vehicle_parked_threshold;    // Distance thats considered a parked state
@@ -476,8 +481,8 @@ extern "C"
     esp_err_t gdo_set_protocol(gdo_protocol_type_t protocol);
 
     /**
-     * @brief Sets the time to close in minutes
-     * @param time_to_close The time to close value.
+     * @brief Sets the time to close in seconds.
+     * @param time_to_close The time to close value in seconds.
      * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid,
      * ESP_ERR_INVALID_STATE if the time is out of range.
      */
@@ -496,7 +501,7 @@ extern "C"
     esp_err_t gdo_enable_ttc(void);
 
     /**
-     * @brief Issues a request to get the current TTC state.
+     * @brief Requests the configured TTC duration and current hold/release state.
      * @return ESP_OK on success.
      */
     esp_err_t gdo_get_ttc_state(void);
@@ -512,6 +517,20 @@ extern "C"
      * @return ESP_OK on success.
      */
     esp_err_t gdo_release_ttc(void);
+
+    /**
+     * @brief Set motion-sensor auto-light control mode.
+     * @param enabled true to enable auto-light mode, false to disable.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_set_auto_light_mode(bool enabled);
+
+    /**
+     * @brief Sets the light timer duration in seconds.
+     * @param seconds The light timer duration in seconds.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_set_light_timer(uint16_t seconds);
 
     /**
      * @brief Encodes and queues a raw Security+ V2 command.

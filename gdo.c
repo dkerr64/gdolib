@@ -91,7 +91,9 @@ static gdo_status_t g_status = {
     .synced = false,
     .openings = 0,
     .ttc_seconds = 0,
+    .ttc_countdown = 0,
     .ttc_state = GDO_TTC_STATE_OFF,
+    .light_timer_seconds = 0,
     .open_ms = 0,
     .close_ms = 0,
     .door_position = -1,
@@ -104,6 +106,7 @@ static gdo_status_t g_status = {
     .tof_timer_usecs = 250000,
     .obst_test_pulse_timer_active = false,
     .obst_test_pulse_timer_usecs = 50000,
+    .auto_light_enabled = false,
     .vehicle_parked_threshold = 100,
     .vehicle_parked_threshold_variance = 5,
     .fw_major = 0,
@@ -491,7 +494,10 @@ esp_err_t gdo_deinit(void)
   g_status.paired_devices.total_all = GDO_PAIRED_DEVICE_COUNT_UNKNOWN;
   g_status.openings = 0;
   g_status.ttc_seconds = 0;
+  g_status.ttc_countdown = 0;
   g_status.ttc_state = GDO_TTC_STATE_OFF;
+  g_status.light_timer_seconds = 0;
+  g_status.auto_light_enabled = false;
   g_status.fw_major = 0;
   g_status.fw_minor = 0;
   g_status.open_ms = 0;
@@ -656,13 +662,19 @@ esp_err_t gdo_get_firmware(void)
 }
 
 /**
- * @brief Trigger a request to get the TTC state settings, only valid for security+v2 protocol.
+ * @brief Requests the TTC setting and hold/release state, only valid for Security+ 2.0.
  * @param void
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if on fail.
  */
 esp_err_t gdo_get_ttc_state(void)
 {
-  return queue_command(GDO_CMD_GET_TTC_STATE, 0, 0xA0, 0);
+  esp_err_t err = queue_command(GDO_CMD_PAIR_3, 0, 0, 0);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
+  return queue_command(GDO_CMD_GET_TTC, 0, 0xA0, 0);
 }
 
 /**
@@ -2025,6 +2037,15 @@ static void decode_packet(uint8_t *packet)
   {
     update_motion_state(GDO_MOTION_STATE_DETECTED);
   }
+  else if (cmd == GDO_CMD_SET_AUTO_LIGHT_MODE)
+  {
+    bool new_state = (nibble & 0x1) != 0;
+    if (g_status.auto_light_enabled != new_state)
+    {
+      g_status.auto_light_enabled = new_state;
+      send_event(GDO_CB_EVENT_AUTO_LIGHT_MODE);
+    }
+  }
   else if (cmd == GDO_CMD_OPENINGS)
   {
     update_openings(nibble, ((byte1 << 8) | byte2));
@@ -2034,33 +2055,77 @@ static void decode_packet(uint8_t *packet)
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_UPDATE_TTC);
   }
-  else if (cmd == GDO_CMD_PAIR_2_RESP && nibble == 0x1)
+  else if (cmd == GDO_CMD_PAIR_2_RESP)
   {
-    g_status.ttc_countdown = (byte1 << 8) | byte2;
-    send_event(GDO_CB_EVENT_UPDATE_TTC);
+    uint16_t value = (byte1 << 8) | byte2;
+    if (nibble == 0x1)
+    {
+      // TTC (Time-To-Close) configuration
+      if (g_status.ttc_seconds != value)
+      {
+        g_status.ttc_seconds = value;
+        send_event(GDO_CB_EVENT_UPDATE_TTC);
+      }
+    }
+    else if (nibble == 0x5)
+    {
+      // Light timer configuration
+      if (g_status.light_timer_seconds != value)
+      {
+        g_status.light_timer_seconds = value;
+        send_event(GDO_CB_EVENT_UPDATE_TTC);
+      }
+    }
   }
-  else if (cmd == GDO_CMD_CANCEL_TTC)
+  else if (cmd == GDO_CMD_SET_TTC)
   {
-    g_status.ttc_state = GDO_TTC_STATE_OFF;
-    g_status.ttc_countdown = (byte1 << 8) | byte2;
     g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
   }
-  else if (cmd == GDO_CMD_TTC)
+  else if (cmd == GDO_CMD_CANCEL_TTC)
   {
-    send_event(GDO_CB_EVENT_TTC);
+    send_event(GDO_CB_EVENT_CANCEL_TTC);
   }
   else if (cmd == GDO_CMD_PAIR_3_RESP)
   {
-    if (byte1 == 0x0A)
+    gdo_ttc_state_t new_state = GDO_TTC_STATE_MAX;
+    gdo_cb_event_t event = GDO_CB_EVENT_MAX;
+
+    switch (byte1)
     {
-      g_status.ttc_state = GDO_TTC_STATE_HOLD;
-      send_event(GDO_CB_EVENT_HOLD_TTC);
+      case 0x09:
+        new_state = GDO_TTC_STATE_OFF;
+        event = GDO_CB_EVENT_CANCEL_TTC;
+        break;
+      case 0x0A:
+        new_state = GDO_TTC_STATE_HOLD;
+        event = GDO_CB_EVENT_HOLD_TTC;
+        break;
+      case 0x0B:
+        new_state = GDO_TTC_STATE_COUNTDOWN;
+        event = GDO_CB_EVENT_UPDATE_TTC;
+        break;
+      case 0x0C:
+        new_state = GDO_TTC_STATE_REL;
+        event = GDO_CB_EVENT_REL_TTC;
+        break;
+      case 0x0E:
+        new_state = GDO_TTC_STATE_ERROR;
+        event = GDO_CB_EVENT_TTC;
+        ESP_LOGW(TAG, "TTC Error state detected - device may require manual recovery");
+        break;
+      default:
+        ESP_LOGD(TAG, "Unknown PAIR_3_RESP state: 0x%02x", byte1);
+        return;
     }
-    else if (byte1 == 0x0C)
+
+    if (g_status.ttc_state != new_state)
     {
-      g_status.ttc_state = GDO_TTC_STATE_REL;
-      send_event(GDO_CB_EVENT_REL_TTC);
+      g_status.ttc_state = new_state;
+      if (event != GDO_CB_EVENT_MAX)
+      {
+        send_event(event);
+      }
     }
   }
   else if (cmd == GDO_CMD_PAIRED_DEVICES)
@@ -2879,14 +2944,14 @@ inline static void update_openings(uint8_t flag, uint16_t count)
 
 /**
  * @brief Updates the local TTC and queues an event if it has changed.
- * @param ttc The new TTC to update to.
+ * @param time_to_close The new TTC to update to.
  */
-inline static void update_ttc(uint16_t ttc)
+inline static void update_ttc(uint16_t time_to_close)
 {
-  ESP_LOGI(TAG, "TTC Seconds remaining: %u", ttc);
-  if (g_status.ttc_countdown != ttc)
+  ESP_LOGI(TAG, "TTC setting: %u seconds", time_to_close);
+  if (g_status.ttc_seconds != time_to_close)
   {
-    g_status.ttc_countdown = ttc;
+    g_status.ttc_seconds = time_to_close;
   }
 }
 
@@ -2896,12 +2961,16 @@ inline static void update_ttc(uint16_t ttc)
  */
 esp_err_t gdo_set_time_to_close(uint16_t time_to_close)
 {
-  esp_err_t err = ESP_OK;
   uint8_t byte1 = (time_to_close >> 8);
   uint8_t byte2 = (uint8_t)time_to_close;
   uint8_t nibble = 1;
+  esp_err_t err = queue_command(GDO_CMD_SET_TTC, nibble, byte1, byte2);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
   update_ttc(time_to_close);
-  queue_command(GDO_CMD_SET_TTC, nibble, byte1, byte2);
   queue_event((gdo_event_t){GDO_EVENT_SET_TTC});
   return err;
 }
@@ -2912,23 +2981,63 @@ esp_err_t gdo_set_time_to_close(uint16_t time_to_close)
  */
 esp_err_t gdo_cancel_ttc(void)
 {
-  esp_err_t err = ESP_OK;
   uint8_t byte1 = 0x05;
   uint8_t byte2 = 0x00;
   uint8_t nibble = 1;
-  queue_command(GDO_CMD_TTC, nibble, byte1, byte2);
+  esp_err_t err = queue_command(GDO_CMD_CANCEL_TTC, nibble, byte1, byte2);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
   queue_event((gdo_event_t){GDO_EVENT_CANCEL_TTC});
   return err;
 }
 
 esp_err_t gdo_enable_ttc(void)
 {
-  esp_err_t err = ESP_OK;
   uint8_t byte1 = 0x04;
   uint8_t byte2 = 0x00;
   uint8_t nibble = 1;
-  queue_command(GDO_CMD_TTC, nibble, byte1, byte2);
+  esp_err_t err = queue_command(GDO_CMD_CANCEL_TTC, nibble, byte1, byte2);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
   queue_event((gdo_event_t){GDO_EVENT_ENABLE_TTC});
+  return err;
+}
+
+esp_err_t gdo_set_auto_light_mode(bool enabled)
+{
+  uint8_t nibble = enabled ? 0x1 : 0x0;
+  uint8_t byte1 = 0x00;
+  uint8_t byte2 = 0x00;
+  esp_err_t err = queue_command(GDO_CMD_SET_AUTO_LIGHT_MODE, nibble, byte1, byte2);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
+  g_status.auto_light_enabled = enabled;
+  send_event(GDO_CB_EVENT_AUTO_LIGHT_MODE);
+  return err;
+}
+
+esp_err_t gdo_set_light_timer(uint16_t seconds)
+{
+  uint8_t byte1 = (seconds >> 8) & 0xFF;
+  uint8_t byte2 = seconds & 0xFF;
+  uint8_t nibble = 0x5;
+  esp_err_t err = queue_command(GDO_CMD_PAIR_2, nibble, byte1, byte2);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
+  g_status.light_timer_seconds = seconds;
+  send_event(GDO_CB_EVENT_UPDATE_TTC);
   return err;
 }
 
