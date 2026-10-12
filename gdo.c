@@ -2100,15 +2100,15 @@ static void decode_packet(uint8_t *packet)
       }
     }
   }
-  else if (cmd == GDO_CMD_CANCEL_TTC)
+  else if (cmd == GDO_CMD_SET_TTC)
   {
     g_status.ttc_countdown = (byte1 << 8) | byte2;
     g_status.ttc_seconds = (byte1 << 8) | byte2;
     send_event(GDO_CB_EVENT_SET_TTC);
   }
-  else if (cmd == GDO_CMD_TTC)
+  else if (cmd == GDO_CMD_CANCEL_TTC)
   {
-    send_event(GDO_CB_EVENT_TTC);
+    send_event(GDO_CB_EVENT_CANCEL_TTC);
   }
   else if (cmd == GDO_CMD_PAIR_3_RESP)
   {

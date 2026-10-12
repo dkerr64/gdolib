@@ -502,7 +502,7 @@ extern "C"
     esp_err_t gdo_enable_ttc(void);
 
     /**
-     * @brief Issues a request to get the current TTC state.
+     * @brief Requests the configured TTC duration and current hold/release state.
      * @return ESP_OK on success.
      */
     esp_err_t gdo_get_ttc_state(void);
@@ -518,6 +518,20 @@ extern "C"
      * @return ESP_OK on success.
      */
     esp_err_t gdo_release_ttc(void);
+
+    /**
+     * @brief Set motion-sensor auto-light control mode.
+     * @param enabled true to enable auto-light mode, false to disable.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_set_auto_light_mode(bool enabled);
+
+    /**
+     * @brief Sets the light timer duration in seconds.
+     * @param seconds The light timer duration in seconds.
+     * @return ESP_OK on success.
+     */
+    esp_err_t gdo_set_light_timer(uint16_t seconds);
 
     /**
      * @brief Encodes and queues a raw Security+ V2 command.
