@@ -2901,7 +2901,7 @@ inline static void update_motion_state(gdo_motion_state_t motion_state)
   ESP_LOGD(TAG, "Motion state: %s", gdo_motion_state_to_string(motion_state));
   if (motion_state == GDO_MOTION_STATE_DETECTED)
   {
-    esp_timer_start_once(motion_detect_timer, 3000 * 1000);
+    esp_timer_start_once(motion_detect_timer, 7000 * 1000);
   }
 
   if (g_status.motion != motion_state)
