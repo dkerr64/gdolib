@@ -693,7 +693,7 @@ esp_err_t gdo_get_obstruction_pulse_stats(gdo_obstruction_pulse_stats_t *stats, 
 
   uint64_t current_time = esp_timer_get_time();
 
-  portENTER_CRITICAL(obst_stats.mux);
+  portENTER_CRITICAL(&obst_stats.mux);
   stats->pulses = obst_pulses;
   stats->current_pulse_count = obst_stats.count;
   stats->last_pulse_time_us = obst_stats.last_pulse_micros;
@@ -705,7 +705,7 @@ esp_err_t gdo_get_obstruction_pulse_stats(gdo_obstruction_pulse_stats_t *stats, 
     obst_stats.last_pulse_micros = 0;
   }
 
-  portEXIT_CRITICAL(obst_stats.mux);
+  portEXIT_CRITICAL(&obst_stats.mux);
 
   // Calculate time since last pulse in milliseconds
   if (stats->last_pulse_time_us > 0)
