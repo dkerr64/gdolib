@@ -137,10 +137,8 @@ static gdo_obstruction_stats_t obst_stats = {
 };
 
 const static uint32_t OBST_CHECK_PERIOD = 250; // Milliseconds between checks for obstruction
-const static uint32_t OBST_LOWER_LIMIT = 1;    // Number of pulses to consider clear state
-
-// Variables to track obstruction pulse statistics
-static volatile uint32_t obst_pulses = 0;
+//const static uint32_t OBST_LOWER_LIMIT = 1;  // Number of pulses to consider clear state
+//static volatile uint32_t obst_pulses = 0;      // Variables to track obstruction pulse statistics
 
 /******************************* PUBLIC API FUNCTIONS **********************************/
 
