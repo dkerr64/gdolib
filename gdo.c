@@ -1474,8 +1474,12 @@ static void obst_timer_cb(void *arg)
 
   if (count_snapshot > 3)
   {
+    // Track "now" (not 0) as the debounce baseline so a single noisy tick with
+    // zero counted pulses right after a clear period can't be misread as having
+    // been silent since boot, which would instantly exceed the 700ms obstructed
+    // threshold below and cause a spurious obstructed->clear blip.
     portENTER_CRITICAL(&stats->mux);
-    stats->last_pulse_micros = 0;
+    stats->last_pulse_micros = micros_now;
     portEXIT_CRITICAL(&stats->mux);
     obs_state = GDO_OBSTRUCTION_STATE_CLEAR;
   }
