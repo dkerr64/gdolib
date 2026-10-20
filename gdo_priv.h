@@ -48,6 +48,10 @@ extern "C"
 // V1 protocol validation
 #define GDO_V1_CMD_IS_VALID(cmd) ((cmd) > V1_CMD_MIN && (cmd) < V1_CMD_MAX)
 
+// Motion detection timeout in milliseconds (after which we declare motion inactive)
+#ifndef GDO_MOTION_TIMEOUT_MS
+#define GDO_MOTION_TIMEOUT_MS 3000
+#endif
 
     typedef enum
     {
