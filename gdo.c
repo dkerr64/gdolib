@@ -3091,6 +3091,16 @@ void gdo_set_obst_override(bool obst_override)
 }
 
 /**
+ * @brief Enables or disables obstruction from status, some openers that do not have obstruction sensors connected.
+ * @param obst_status true to enable from status, false to disable.
+ */
+void gdo_set_obst_from_status(bool obst_status)
+{
+  g_status.obst_from_status = obst_status;
+  ESP_LOGI(TAG, "Obstruction from status %s", obst_status ? "enabled" : "disabled");
+}
+
+/**
  * @brief Set the obst test pulse interval timer value and enable/disable flag
  * @param interval the interval time in micro seconds
  * @param enabled the flag to enable or disable the timer on gdo_start
