@@ -101,6 +101,7 @@ static gdo_status_t g_status = {
     .client_id = 0,
     .toggle_only = false,
     .obst_override = false,
+    .obst_from_status = false,
     .last_move_direction = GDO_DOOR_STATE_UNKNOWN,
     .tof_timer_active = false,
     .tof_timer_usecs = 250000,
@@ -130,7 +131,7 @@ static esp_timer_handle_t obst_test_pulse_timer;
 static esp_timer_handle_t v1_status_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = GDO_MIN_COMMAND_INTERVAL_MS;
-static uint32_t g_ttc_delay_s = 0;
+//static uint32_t g_ttc_delay_s = 0;
 
 static gdo_obstruction_stats_t obst_stats = {
     .count = 0,
