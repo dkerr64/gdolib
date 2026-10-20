@@ -579,6 +579,12 @@ extern "C"
      */
     void gdo_set_obst_override(bool obst_override);
 
+    /**
+     * @brief Enables or disables obstruction from status, some openers that do not have obstruction sensors connected.
+     * @param obst_status true to enable from status, false to disable.
+     */
+    void gdo_set_obst_from_status(bool obst_status);
+
     /************************************* VEHICLE Functions *****************************************/
 
     /**
