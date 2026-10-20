@@ -131,7 +131,7 @@ static esp_timer_handle_t obst_test_pulse_timer;
 static esp_timer_handle_t v1_status_timer;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = GDO_MIN_COMMAND_INTERVAL_MS;
-static uint32_t g_ttc_delay_s = 0;
+//static uint32_t g_ttc_delay_s = 0;
 
 static gdo_obstruction_stats_t obst_stats = {
     .count = 0,
@@ -655,16 +655,6 @@ esp_err_t gdo_get_status(gdo_status_t *status)
   }
   *status = g_status;
   return ESP_OK;
-}
-
-/**
- * @brief Trigger a request to get the current firmware of the GDO, only valid for security+v2 protocol.
- * @param void
- * @return ESP_OK on success, ESP_ERR_INVALID_ARG if on fail.
- */
-esp_err_t gdo_get_firmware(void)
-{
-  return queue_command(GDO_CMD_GET_FIRMWARE, 0, 0, 0);
 }
 
 /**
