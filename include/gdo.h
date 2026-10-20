@@ -188,6 +188,7 @@ extern "C"
         bool synced;                          // Synced state
         bool toggle_only;                     // Used when the door opener only supports the toggle command.
         bool obst_override;                   // Used when the door opener has no obstruction sensors.
+        bool obst_from_status;                // Obstruction state derived from status response
         bool tof_timer_active;                // ToF interval timer active
         bool obst_test_pulse_timer_active;    // Obstruction test pulse output pin timer active
         bool auto_light_enabled;              // Motion-sensor auto-light control enabled
